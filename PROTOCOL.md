@@ -48,8 +48,8 @@ reading the sources named here and argued in this document, with no proof and no
 | [Trust](#identity): pins, the store, waiting, rotation | `coqui-peer` | Not analysed |
 | [Pairing](#pairing): the exchange, its messages, its confirmation | `coqui-peer` | Not analysed |
 | A PIN exchange **inside** an XX session whose peer may be anyone, bound by an export | Ours, as `coqui-peer-webcrypto` does it | **The composition is not analysed**: nothing shows XX and SPAKE2 together give what each gives alone |
-| SPAKE2: the `spake2` crate's constants M and N, its hash of the password, its side bytes, its key | That crate, version 0.4 | Only its source was read. It was not compared with RFC 9382 |
-| [The JavaScript SPAKE2](#pairing): Edwards25519 over `BigInt`, written here to match that crate | Ours | **Written from that crate's source, not constant-time**, checked only by the answers listed there |
+| SPAKE2: the `spake2` crate's constants M and N, its hash of the password, its side bytes, its key | That crate, version 0.4 | Its source was read and [compared with RFC 9382](#against-rfc-9382), by reading. It is not that RFC's profile |
+| [The JavaScript SPAKE2](#pairing): Edwards25519 over `BigInt`, written here to match that crate | Ours | **Written from that crate's source, not constant-time**, checked only by the answers listed there. The scalar's length is hidden; nothing else is shown about its time |
 
 The method is chosen per endpoint and never negotiated on one, so nothing on the path can talk it down.
 A peer running another method fails the handshake, and so does a run for another purpose: pairing and ordinary runs differ
@@ -256,7 +256,7 @@ it. A receiver refuses a sender above its own limit, so a limit is raised at bot
 **Why 2^38.** Each message counts its length plus 32, about the bytes of AES blocks it uses: the block for the
 tag's counter and GHASH's length block. RFC 8446 section 5.5 gives AES-GCM 2^24.5 full-size records (2^38.5
 bytes) for a margin of about 2^-57. Noise section 14 says no more than 2^56 bytes, and section 15.1 gives the
-margin behind that as less than one in a million, against a random guess at a 256-byte plaintext. The stricter
+margin behind that as less than one in a million, against a random guess at a 2^56-byte plaintext. The stricter
 number is the default, and a host above it gets it listed by `weakened()`.
 
 **The key change.** With rekey on, when the next Noise message would pass the limit, the sender first sends a
@@ -397,6 +397,19 @@ A key in a message must be the one the session proved, to the byte, or the excha
 - **Order.** The responder takes an attempt at the PIN when the PAKE message arrives, sends its reply and MAC, and on the
   right confirmation keeps the joiner's key and only then sends done. The joiner verifies the responder's MAC before it
   sends its own.
+
+### Against RFC 9382
+
+The exchange is the `spake2` crate's, and that is not RFC 9382's profile. This was read side by side, not proved.
+
+| RFC 9382 | Here | What that comes to |
+| --- | --- | --- |
+| M and N from a public seed | Other constants, from the seeds `M` and `N` by python-spake2's procedure | Rebuilt from those seeds and equal, each of order L. Nobody has a shortcut to their logs beyond what the hash gives |
+| `w = MHF(pw) mod p`, the function a SHOULD | HKDF-SHA256, 48 bytes, modulo L | Wide enough to remove bias. No memory-hard function, which guessing online only does not call for |
+| `K = h·x·(pB − w·N)`, by the cofactor | No multiplication by h | A small part of a message needs the sender to subtract the right `wM` anyway, so one guess per run stands; reasoned |
+| Check group membership | Decompression only; low-order points are taken | Within the RFC's "member of G". The module refuses a second encoding, and the crate takes one |
+| The transcript, with lengths and `w` | SHA-256 over the hash of the password, of each id, both elements and K | Fixed lengths, so unambiguous. The ids are the proved keys' |
+| Confirmation both ways | HMAC each way, over both keys, both messages and the export | The responder confirms first, which one guess per run needs |
 
 ### What the JavaScript side leaves open
 
