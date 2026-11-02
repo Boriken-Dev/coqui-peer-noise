@@ -1,0 +1,322 @@
+# The Noise method: wire profile v1
+
+**Status:** experimental. It has had no independent security review and is not an IETF or ACP
+standard. Implementations: Rust (`src/`) and JavaScript (`bindings/js/coqui-peer-noise/`), checked
+against each other, against `snow` (a third implementation of this Noise protocol, in the Rust tests),
+against the published vectors in `tests/vectors/published.json` and against `tests/vectors/session.json`.
+
+## What this is
+
+Pattern XX of the [Noise Protocol Framework](https://noiseprotocol.org/noise.html), revision 34, in one
+concrete protocol, `Noise_XX_25519_AESGCM_SHA256`, and nothing else. It runs over any reliable, ordered
+message transport and depends on nothing beneath it: no TLS session, certificate, origin or host name.
+Both peers end the handshake holding a session id and keys, and **only records made with those keys are
+tied to the peers that were proved**.
+
+```text
+-> e
+<- e, ee, s, es
+-> s, se
+```
+
+What rests on published analysis is that pattern with those functions. The Noise specification's own
+section 7.7 gives XX these properties: from the second message on, payloads have source 2, sender
+authentication that resists key-compromise impersonation, and from the third message on, destination 5,
+encryption to a known recipient with strong forward secrecy. Kobeissi, Nicolas and Bhargavan, "Noise
+Explorer" (ePrint 2018/766), say in their abstract that they confirm the stated security goals of the 12
+fundamental patterns, of which section 7.5 lists XX as one. Girol et al., "A Spectral Analysis of Noise"
+(USENIX Security 2020), compute the strongest threat model per pattern. Only those abstracts and the
+specification were read for this document. Neither paper covers what this profile adds above Noise: the
+prologue's form, the record framing, the close record, the key change, the export secret, or how keys
+become ids.
+
+The method is chosen per endpoint and never negotiated on one, so nothing on the path can talk it down.
+A peer running another method fails the handshake.
+
+### Why these functions
+
+AES-256-GCM and SHA-256 are in WebCrypto, so a browser needs no dependency. noise-libp2p chose ChaChaPoly
+instead, for platforms with no hardware AES; that reason does not outweigh this one here, and section 14
+of the specification names the cost: AES-GCM's security falls with the volume under one key. See
+[limits](#limits-and-key-changes).
+
+X25519 in WebCrypto is what a browser must have. By MDN's browser-compat-data for `SubtleCrypto`, read
+2026-11-02: Chrome 133, Firefox 130, Safari 17. A browser without it cannot use this method.
+`coqui-peer-webcrypto` is the method for those. This module's browser test has run in Chrome 156 and
+Edge 156 on Windows ARM64, with a non-extractable key held in IndexedDB; Firefox and Safari have not been
+run.
+
+### Why not `snow`
+
+The Rust side implements section 5's objects itself, over RustCrypto's `sha2`, `hkdf` and `aes-gcm` and
+`x25519-dalek`, and uses `snow` 0.10 only as the other end of its tests. `snow` keeps `ck` in a `Copy`
+struct it never zeroes, and its default cipher and DH key are plain arrays with no `Drop`, so the
+[erasure](#erasure) below could not hold; a custom resolver fixes the cipher and the DH key but cannot
+reach `ck`. It exposes no way to derive an export from `ck`, only a feature named `risky-raw-split`
+returning the two cipher keys. And its default resolver uses `sha2` and `aes-gcm` lines other than the
+coqui-peer family's. The cost is a second implementation to check, which the published vectors and the
+`snow` tests do.
+
+## Identity
+
+| Field | Value |
+| --- | --- |
+| Method name | `noise` |
+| Profile | `dev.boriken.coqui.peer-noise/v1` |
+| Static key | an X25519 key, RFC 7748's 32 bytes on the wire |
+| Stored form | RFC 8410's SubjectPublicKeyInfo DER: always 44 bytes, the 12 bytes `302a300506032b656e032100` then the key |
+| Peer id | `sha256:` and the lowercase hex SHA-256 of the 44 bytes: coqui-peer's `PeerId` |
+| Key material | method `noise`, label `PUBLIC KEY`, the 44 bytes |
+| Private key file | RFC 8410's PKCS#8 in PEM: 48 bytes of DER, no attributes, no public key |
+
+**The Noise static key is the identity.** `openssl pkey -pubout -outform DER | sha256sum` gives the id.
+
+### The two options
+
+**A. The static key is the identity**, which this profile does. **B. A signing identity signs the static
+key**, as noise-libp2p does (its spec, revision r5: the payload carries `identity_key` and `identity_sig`,
+a signature over `noise-libp2p-static-key:` and the static key).
+
+libp2p gives two reasons for B, in "Distinct Noise and Identity Keys", and neither applies here:
+
+- Its identity keys already exist, of several types, none usable as a Noise static key. A coqui-peer key
+  already belongs to one method: `KeyMaterial` names it, and a `coqui-peer-webcrypto` id is not a
+  `coqui-peer-tls` id today.
+- It cannot be sure identity keys stay out of other protocols, which section 14 of the Noise
+  specification warns about. A key made for this method stays in it, which is the rule that section
+  gives.
+
+What A gains:
+
+- **The proof is Noise's own.** Section 14 of the specification: a protocol with static keys "verifies that
+  the corresponding private keys are possessed", and leaves it to the application to decide whether the key
+  is acceptable, by pins or certificates or key continuity. That is a `TrustStore`. B adds a signature layer
+  outside what section 7.7 describes.
+- **No signature, so no transferable evidence.** libp2p's signature covers the static key alone, is not
+  tied to a run, and anyone holding it can show it. A method without one leaves no evidence that a third
+  party can verify, unlike `coqui-peer-webcrypto`'s signatures.
+- **One key to hold.** In a browser a non-extractable X25519 key, with no second key type whose own
+  availability would also limit the method.
+
+What A costs:
+
+- **A static key is the identity for as long as it lives.** With B, a static key can be replaced without
+  changing the id. Here that is a rotation: `TrustStore::announce_successor`, then proving the successor,
+  which `Trust::Store` promotes.
+- **Moving an endpoint from `coqui-peer-webcrypto` means a new id.** The rule of `docs/browser.md` in coqui-acp is that a key that
+  changes is a new agent, whose grants do not carry over. The store's successor mechanism takes a
+  `KeyMaterial` of any method, so a peer proved under `webcrypto` can announce its `noise` key, and
+  `tests/handshake.rs` runs the second half of that. Whether a host offers it is the host's choice.
+- **A key that cannot sign.** A use that needs a signature needs another key.
+
+### Against what it must fit
+
+- **`PeerId`.** `Digest` has `sha256`, `sha384`, `sha512` and `sha1`; `x25519:<hash>` is not a `PeerId`, and
+  parsing it is `Error::UnknownDigest`. `KeyMaterial::id` is always the SHA-256 of the bytes, and the docs of
+  `KeyMaterial` say a method with other ids "does not store its keys here". So an id is `sha256:`, and which
+  method it belongs to is `KeyMaterial.method`, which is what a `.acp` client reads.
+- **What is hashed.** RFC 8410's SPKI and not the bare 32 bytes, as `coqui-peer-webcrypto` hashes its SPKI:
+  the store keeps a `PUBLIC KEY` block that standard tools read, WebCrypto's `exportKey('spki')` gives the
+  same bytes, and a key of another type under the same 32 bytes has another id.
+- **`TrustStore`.** It compares the whole `KeyMaterial`, so the same bytes stored under another method are
+  not this key. A responder records a stranger as waiting only after the proof, per its pairing contract.
+- **Pairing.** `coqui_peer::pair`'s `Channel` wants `local` and `remote` as `KeyMaterial` and a `binding`, and
+  this gives them: the proved key and an export. Running it inside a session is not in this version.
+- **`.acp`.** `docs/browser.md` in coqui-acp has `AcpIdentity { peer, verified, method }`, with `method` as "any proof's name, not a
+  fixed list": `peer` is the id above, `method` is `noise`. `verified` may be true, since "every message after
+  the proof is protected by keys that came out of it".
+
+Each encoding is the only one: a key whose top bit is set, or at or above p, is refused. RFC 7748 section 5
+has X25519 mask that bit and reduce modulo p, so without this one private key would answer to several
+public encodings and so several ids.
+
+## Handshake
+
+Each message is sent whole and binary. Their lengths are fixed, and any other length is refused before
+anything else is done with it. Payloads are always empty, and a message is refused for carrying one.
+
+| # | From | Tokens | Length |
+| --- | --- | --- | --- |
+| 1 | Initiator | `e` | 32 |
+| 2 | Responder | `e, ee, s, es` | 96: 32, 32 + 16, 16 |
+| 3 | Initiator | `s, se` | 64: 32 + 16, 16 |
+
+**The prologue** is two fields, each four big-endian length bytes and then its bytes: the profile above, and
+the [outer binding](#the-outer-binding), empty unless both ends set one. Section 6: a difference fails the
+handshake with a decryption error. It is never sent.
+
+**Order of checks.** A public key read is refused first if it is not in its one encoding. A DH output of all
+zeros is refused. Section 12.1 allows that and discourages it, as adding complexity and not improving security,
+and for Noise's own claims that stands. This profile claims one more thing, which section 14's "misusing public
+keys as secrets" warns about: that a peer holds the static key it presents, so a store may record it as proved.
+A key of small order gives all zeros whatever the private key (RFC 7748 section 6.1), so a peer could make the tag
+below for a "key" it holds no private key for. Then the tag of the empty payload after `es` or `se`, which is the
+proof of the static key. Then a static key equal to this side's own is refused. Only then is trust asked: the
+initiator before its third message, which holds its static key, and the responder before anything else.
+
+Trust is never decided on an unproved key. A responder keeping a store records a proved, unknown peer as
+waiting, per coqui-peer's key-proof contract. Nothing enrolls a peer automatically.
+
+**What each end knows when it finishes.** The responder finishes last, having proved the initiator and
+decided. The initiator finishes on sending the third message, having proved the responder, and does not
+yet know whether it was accepted: a refused initiator finds out by the connection ending. A record it
+sends meanwhile is encrypted to the responder it proved, and is destination 5 of section 7.7.
+
+## Session id and exports
+
+- **Session id**: section 11.2's handshake hash `h`. It is not secret: whoever carried the handshake and knows
+  any binding can compute it.
+- **Transport keys**: `Split()`'s two outputs, the first for initiator to responder.
+- **Export secret**: the third output of the same HKDF call (`HKDF(ck, zerolen, 3)`), which `Split()` does not
+  ask for. Noise's HKDF is RFC 5869's with `ck` as salt and no info, so the first two outputs are what the
+  specification gives. `ck` is then erased.
+- **Exports**: `HKDF-SHA256(salt = absent, ikm = export secret, info = field("<profile>/export") || field(h) ||
+  field(label) || length as 4 big-endian bytes)`, at most 8160 bytes. `h` is there because section 14 says a
+  higher layer should bind to it and not to `ck`; another label or length gives unrelated bytes.
+
+This construction is this profile's, not the specification's.
+
+## Records
+
+After the handshake, each application message is one **record**: a sequence of Noise transport messages, each
+with the two-byte big-endian length section 13 recommends, carried whole as one binary message.
+
+```text
+record  = 1*( length message )
+message = AESGCM(k, n, ad = "", type || contents)     ; section 12.4's nonce; n never resets
+```
+
+`type` is the first plaintext byte:
+
+| Type | Meaning | Contents | Where |
+| --- | --- | --- | --- |
+| `01` | data: an application message's last or only part | any, possibly empty | last in a record |
+| `02` | close | nothing | alone in a record |
+| `03` | key change: the next message of this direction is under `REKEY(k)` | nothing | before another message, never twice in a row |
+| `04` | part: more of this application message follows | any non-empty | exactly 65535 bytes on the wire |
+
+**A record has one shape for one message.** Each part holds 65518 bytes of the message, the most section 3's
+65535-byte limit leaves after the tag and the type, and the last part holds the rest. So a message of any
+length is one record, and what bounds it is the transport, not this protocol. A record's parts are bound to
+each other by the nonce, so a relay can neither drop one nor cut the record between two without being refused.
+
+A record that fails to open, has any other type, breaks the shapes above, has a byte after its last message, or
+carries contents in a close or a key change, ends the session in **both** directions: nothing later is
+believed, and nothing more is sent. Nothing of a record is returned before all of it opened.
+
+## The sealed close
+
+Section 3 of the specification has no end marker, and section 14 makes truncation "an application
+responsibility". This is that: **a stream that ends without a close record is reported as truncated**. The
+transport ending does not say the stream is complete, the close record does. Each direction closes on its own,
+so one side can go on receiving after it closed. After `seal`ing a close a side seals nothing more; a record
+after the peer's close is refused.
+
+## Limits and key changes
+
+Each setting has a default, no floor and no ceiling beyond the specification's own rules, and is the host's
+to choose. `rekey` and a lower limit are each side's own: a change of key is announced in the record that makes
+it. A receiver refuses a sender above its own limit, so a limit is raised at both ends or not at all.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `key limit` | 2^38 | what one key may carry, in one direction, each Noise message counting its length and 32 |
+| `rekey` | on | whether a sender changes its key at the limit by itself |
+
+**Why 2^38.** Each message counts its length plus 32, about the bytes of AES blocks it uses: the block for the
+tag's counter and GHASH's length block. RFC 8446 section 5.5 gives AES-GCM 2^24.5 full-size records (2^38.5
+bytes) for a margin of about 2^-57. Noise section 14 says no more than 2^56 bytes, and section 15.1 gives the
+margin behind that as less than one in a million, against a random guess at a 256-byte plaintext. The stricter
+number is the default, and a host above it gets it listed by `weakened()`.
+
+**The key change.** With rekey on, when the next Noise message would pass the limit, the sender first sends a
+key change under the current key, applies section 4.2's `REKEY(k)`, and carries on under the new key, in the same
+record, with the count at zero. The change itself and a close are not counted: each is 17 bytes and neither can
+be refused for the limit. The nonce carries on, as section 11.3 says it must. So a key never carries more than
+the limit, and a long record may span keys. A smaller limit rekeys more often, which also gives older records
+protection against a later compromise of the key.
+
+**At the limit.**
+
+- A single Noise message costing more than the limit is refused with a limit error, whatever `rekey` says: no
+  key could carry it. A limit of zero passes only a close.
+- With rekey off, a record that would pass the limit is refused with a limit error before anything of it is
+  sealed. The session stays intact, a close still passes, and carrying on takes a new handshake.
+- An opener that sees a peer pass the limit on one key ends the session: only a peer running above this side's
+  limit does this, and part of a record may already have been opened.
+- The nonces run out at 2^64 - 1, section 5.1's reserved value: a direction that cannot fit a record below it
+  ends the session, as section 5 requires. This is the specification's and not a setting.
+
+## Through a relay
+
+Anything carrying the connection is a relay: a TLS-terminating reverse proxy such as nginx, or an attacker holding
+a certificate, or one a user was lured to. The method needs no cooperation from it and no TLS beneath it.
+
+| A relay **can** | A relay **cannot** |
+| --- | --- |
+| forward the run unchanged, which only connects the two real parties | read a record or a static key, or learn the session's keys or exports |
+| see ephemeral keys, the session id if it knows any binding, and each message's size and time | inject, alter, reorder, replay or reflect a record, or cut one in the middle |
+| block, delay or cut the connection, which a peer reports as truncated | end a stream so that it looks complete: it has no key to make a close record |
+| learn the responder's static key by starting a run with it, since a responder sends it to an initiator it has not authenticated: section 7.8's property 1 | learn an initiator's static key without being a responder that initiator admits: section 7.8's property 8 |
+| run a handshake of its own under its own key, against a peer that trusts that key | make a peer that pins another id accept its key, or complete a run for a key whose private key it lacks |
+
+**The right-hand column holds only for what goes through the session.** A peer that speaks plain application
+messages beside the records, trusting the handshake, hands the whole connection to the relay: it forwards the
+three messages, both ends succeed, and it then reads and writes as it likes.
+
+It does not protect against a party that serves the page. A browser runs the code its origin sends, so if the
+reverse proxy also serves the page's JavaScript, it can replace that code. Ship the module in the application
+(an extension, a packaged app), or serve it from where the carrier cannot change it.
+
+### The outer binding
+
+Where each end really terminates one TLS connection itself, both may pass that connection's exporter as the
+binding. It goes in the prologue and is never sent, so a relay ending TLS on both sides gives the two ends
+different values and the handshake fails at the second message: it refuses such a relay, rather than only
+blinding it. It adds nothing to what the session already protects. **Through a reverse proxy, or from a browser,
+no two ends can read one value, so it stays empty.** Setting it through a proxy fails every handshake, which is
+why it is opt-in and never derived automatically. It is fixed once the first message has gone.
+
+Section 6 of the specification notes the prologue does not go into the encryption keys, only `h`. This uses it
+for what that section says it is for, confirming both sides saw the same thing.
+
+## Bounds and refusal
+
+There is nothing to negotiate, so nothing to downgrade: no version field, no cipher list, no message type. A
+message is refused by its length before anything else. Errors never quote what the peer sent. A failed handshake
+drops what it had queued and stays failed.
+
+The crate's `FramedStream` refuses a frame by its declared length before reading it, at `MAX_HANDSHAKE_MESSAGE`
+for the handshake, where `coqui_peer::drive_stream` would take up to 1 MiB.
+
+## Erasure
+
+Forward secrecy holds only if the ephemeral keys, `ck` and the session keys are erased. What the implementations
+actually do:
+
+- **Rust.** Ephemeral and long-term keys, every `ck`, the HKDF output, the export secret and PEM text are held on
+  the heap in place and zeroed when dropped, and `tests/erasure.rs` scans every freed block for them. Copies a move
+  leaves on the stack, and the working state of `x25519-dalek`, `hkdf`, `sha2` and `aes-gcm` on the stack, are not
+  erased.
+- **JavaScript.** Key bytes are wiped where the module holds them (`ck`, HKDF's outputs, a DH output), and every key
+  after that is a non-extractable `CryptoKey` it cannot wipe. Noise's HKDF needs each chaining key as bytes, so those
+  exist in JavaScript memory for the handshake. It drops its reference to the ephemeral key when the handshake ends,
+  and `session.destroy()` drops the session's keys; when the memory is cleared is up to the engine's garbage
+  collector.
+
+## Not in this protocol
+
+- **Pairing inside a session.** This version has none: a peer is admitted by a pin or a store, and the proved
+  stranger's key waits in the store for its operator.
+- **Hiding sizes.** Section 13 recommends padding; there is none, and a relay sees each record's length.
+- **Hiding the responder.** Section 7.8, property 1. A responder that must not be identified by probes needs
+  something in front of it.
+- **Limiting pre-authentication work.** Each first message costs a responder an ephemeral key and two DH
+  operations, and costs the sender nothing; a third message costs one more. The protocol has no cookie or puzzle, so
+  bounding this is the host's: admission by address, connections at once, a deadline on the handshake.
+- **Revocation of a running session.** Trust is read at each handshake. A host that removes a peer closes that
+  peer's open connections itself.
+- **Key-compromise resistance after the fact.** Whoever later learns a static private key can impersonate that peer
+  from then on, and cannot read recorded sessions, whose keys came through `ee` as well.
+- **Keeping a page's key from its own origin.** A non-extractable key cannot be copied out, but any script in the
+  origin can use it, and IndexedDB's contents can be cleared by the browser or the user.

@@ -1,0 +1,121 @@
+pub mod coqui_peer_noise
+pub use coqui_peer_noise::Established
+pub use coqui_peer_noise::KeyMaterial
+pub use coqui_peer_noise::MessageTransport
+pub use coqui_peer_noise::Method
+pub use coqui_peer_noise::PeerId
+pub use coqui_peer_noise::Random
+pub use coqui_peer_noise::TrustStore
+pub use coqui_peer_noise::Weakening
+#[non_exhaustive] pub enum coqui_peer_noise::Error
+pub coqui_peer_noise::Error::BadProof
+pub coqui_peer_noise::Error::Closed
+pub coqui_peer_noise::Error::Io(core::io::error::Error)
+pub coqui_peer_noise::Error::Key
+pub coqui_peer_noise::Error::LimitReached
+pub coqui_peer_noise::Error::Malformed
+pub coqui_peer_noise::Error::Random
+pub coqui_peer_noise::Error::Record
+pub coqui_peer_noise::Error::State
+pub coqui_peer_noise::Error::TooLong
+pub coqui_peer_noise::Error::Truncated
+pub coqui_peer_noise::Error::Unsupported
+pub coqui_peer_noise::Error::Untrusted
+impl core::convert::From<core::io::error::Error> for coqui_peer_noise::Error
+pub fn coqui_peer_noise::Error::from(core::io::error::Error) -> Self
+impl core::error::Error for coqui_peer_noise::Error
+pub fn coqui_peer_noise::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Display for coqui_peer_noise::Error
+pub fn coqui_peer_noise::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum coqui_peer_noise::Trust
+pub coqui_peer_noise::Trust::Pinned(alloc::collections::btree::set::BTreeSet<coqui_peer::id::PeerId>)
+pub coqui_peer_noise::Trust::Store(coqui_peer::store::TrustStore)
+impl coqui_peer_noise::Trust
+pub fn coqui_peer_noise::Trust::pinned(impl core::iter::traits::collect::IntoIterator<Item = coqui_peer::id::PeerId>) -> Self
+pub struct coqui_peer_noise::FramedStream<S>
+impl<S> coqui_peer_noise::FramedStream<S>
+pub fn coqui_peer_noise::FramedStream<S>::into_inner(self) -> S
+pub const fn coqui_peer_noise::FramedStream<S>::new(S, usize) -> Self
+pub const fn coqui_peer_noise::FramedStream<S>::set_max_message(&mut self, usize)
+impl<S: alloc::io::read::Read + core::io::write::Write> coqui_peer::drive::MessageTransport for coqui_peer_noise::FramedStream<S>
+pub fn coqui_peer_noise::FramedStream<S>::recv(&mut self) -> core::io::error::Result<alloc::vec::Vec<u8>>
+pub fn coqui_peer_noise::FramedStream<S>::send(&mut self, &[u8]) -> core::io::error::Result<()>
+impl<S: coqui_peer::drive::ReadTimeout> coqui_peer::drive::ReadTimeout for coqui_peer_noise::FramedStream<S>
+pub fn coqui_peer_noise::FramedStream<S>::set_read_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
+impl<S: coqui_peer::drive::WriteTimeout> coqui_peer::drive::WriteTimeout for coqui_peer_noise::FramedStream<S>
+pub fn coqui_peer_noise::FramedStream<S>::set_write_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
+pub struct coqui_peer_noise::Identity(_)
+impl coqui_peer_noise::Identity
+pub fn coqui_peer_noise::Identity::from_pkcs8_der(&[u8]) -> core::result::Result<Self, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Identity::from_pkcs8_pem(&str) -> core::result::Result<Self, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Identity::generate() -> core::result::Result<Self, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Identity::generate_with(&coqui_peer::random::Random) -> core::result::Result<Self, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Identity::key_material(&self) -> coqui_peer::key::KeyMaterial
+pub fn coqui_peer_noise::Identity::open_or_create(&std::path::Path) -> core::result::Result<Self, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Identity::peer_id(&self) -> coqui_peer::id::PeerId
+pub fn coqui_peer_noise::Identity::public_key(&self) -> &[u8; 32]
+pub fn coqui_peer_noise::Identity::read(&std::path::Path) -> core::result::Result<core::option::Option<Self>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Identity::spki_der(&self) -> &[u8; 44]
+pub fn coqui_peer_noise::Identity::to_pkcs8_pem(&self) -> core::result::Result<zeroize::Zeroizing<alloc::string::String>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Identity::write_new(&self, &std::path::Path) -> core::result::Result<(), coqui_peer_noise::Error>
+impl core::fmt::Debug for coqui_peer_noise::Identity
+pub fn coqui_peer_noise::Identity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct coqui_peer_noise::Noise(_)
+impl coqui_peer_noise::Noise
+pub fn coqui_peer_noise::Noise::identity(&self) -> &coqui_peer_noise::Identity
+pub fn coqui_peer_noise::Noise::new(coqui_peer_noise::Identity) -> Self
+pub fn coqui_peer_noise::Noise::weakened(&self) -> alloc::vec::Vec<coqui_peer::weakening::Weakening>
+pub fn coqui_peer_noise::Noise::with_initiators(self, coqui_peer_noise::Trust) -> Self
+pub fn coqui_peer_noise::Noise::with_key_limit(self, u64) -> Self
+pub fn coqui_peer_noise::Noise::with_random(self, coqui_peer::random::Random) -> Self
+pub fn coqui_peer_noise::Noise::with_rekey(self, bool) -> Self
+pub fn coqui_peer_noise::Noise::with_responders(self, coqui_peer_noise::Trust) -> Self
+impl coqui_peer::method::Method for coqui_peer_noise::Noise
+pub type coqui_peer_noise::Noise::Handshake = coqui_peer_noise::NoiseHandshake
+pub fn coqui_peer_noise::Noise::initiate(&self) -> core::result::Result<coqui_peer_noise::NoiseHandshake, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Noise::name(&self) -> &'static str
+pub fn coqui_peer_noise::Noise::respond(&self, core::option::Option<core::net::socket_addr::SocketAddr>) -> core::result::Result<coqui_peer_noise::NoiseHandshake, coqui_peer_noise::Error>
+impl core::fmt::Debug for coqui_peer_noise::Noise
+pub fn coqui_peer_noise::Noise::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct coqui_peer_noise::NoiseHandshake
+impl coqui_peer_noise::NoiseHandshake
+pub fn coqui_peer_noise::NoiseHandshake::with_binding(self, &[u8]) -> core::result::Result<Self, coqui_peer_noise::Error>
+impl coqui_peer::method::Handshake for coqui_peer_noise::NoiseHandshake
+pub type coqui_peer_noise::NoiseHandshake::Error = coqui_peer_noise::Error
+pub type coqui_peer_noise::NoiseHandshake::Output = coqui_peer_noise::Session
+pub fn coqui_peer_noise::NoiseHandshake::finish(self) -> core::result::Result<coqui_peer::method::Established<coqui_peer_noise::Session>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::NoiseHandshake::framing(&self) -> coqui_peer::method::Framing
+pub fn coqui_peer_noise::NoiseHandshake::is_complete(&self) -> bool
+pub fn coqui_peer_noise::NoiseHandshake::receive(&mut self, &[u8]) -> core::result::Result<(), coqui_peer_noise::Error>
+pub fn coqui_peer_noise::NoiseHandshake::transmit(&mut self) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, coqui_peer_noise::Error>
+impl core::fmt::Debug for coqui_peer_noise::NoiseHandshake
+pub fn coqui_peer_noise::NoiseHandshake::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct coqui_peer_noise::Opener
+impl coqui_peer_noise::Opener
+pub fn coqui_peer_noise::Opener::open(&mut self, &[u8]) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Opener::verify_end(&self) -> core::result::Result<(), coqui_peer_noise::Error>
+impl core::fmt::Debug for coqui_peer_noise::Opener
+pub fn coqui_peer_noise::Opener::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct coqui_peer_noise::Sealer
+impl coqui_peer_noise::Sealer
+pub fn coqui_peer_noise::Sealer::close(&mut self) -> core::result::Result<alloc::vec::Vec<u8>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Sealer::seal(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, coqui_peer_noise::Error>
+impl core::fmt::Debug for coqui_peer_noise::Sealer
+pub fn coqui_peer_noise::Sealer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct coqui_peer_noise::Session
+impl coqui_peer_noise::Session
+pub fn coqui_peer_noise::Session::close(&mut self) -> core::result::Result<alloc::vec::Vec<u8>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Session::export(&self, &str, &mut [u8]) -> core::result::Result<(), coqui_peer_noise::Error>
+pub const fn coqui_peer_noise::Session::id(&self) -> &[u8; 32]
+pub fn coqui_peer_noise::Session::open(&mut self, &[u8]) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Session::seal(&mut self, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::Session::split(self) -> (coqui_peer_noise::Sealer, coqui_peer_noise::Opener)
+pub fn coqui_peer_noise::Session::verify_end(&self) -> core::result::Result<(), coqui_peer_noise::Error>
+impl core::fmt::Debug for coqui_peer_noise::Session
+pub fn coqui_peer_noise::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const coqui_peer_noise::DEFAULT_KEY_LIMIT: u64
+pub const coqui_peer_noise::MAX_HANDSHAKE_MESSAGE: usize
+pub const coqui_peer_noise::METHOD: &str
+pub const coqui_peer_noise::PROFILE: &str
+pub const coqui_peer_noise::PROTOCOL_NAME: &str
+pub fn coqui_peer_noise::random() -> coqui_peer::random::Random
