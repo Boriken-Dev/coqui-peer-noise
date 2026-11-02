@@ -37,6 +37,10 @@ pub const DEFAULT_FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
 /// deadline to refuse by only from the joiner's first message.
 const EXPIRED_REFUSAL: [u8; 3] = [1, 8, 2];
 
+/// How many reads in a row that time out with time left, and no record between, are taken as ended
+/// early by the operating system. One more ends the exchange as expired.
+const MAX_EARLY_TIMEOUTS: u32 = 3;
+
 /// The method for a connection that only pairs: the responder admits whoever proves a key, since a
 /// joiner is a stranger, and what it ends in is a [`PairingSession`], which carries the pairing
 /// exchange and nothing else. No application message can pass over it.
@@ -331,7 +335,8 @@ impl PairingSession {
     /// its first message. From that message each read waits at most until the exchange's deadline,
     /// the desk's. When either runs out the joiner is told, and this is
     /// `Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. A time already spent is expired
-    /// at once, with nothing read. These bounds hold against a slow peer only if a whole `recv` obeys
+    /// at once, with nothing read, and so are more than three reads in a row that time out with
+    /// time left and no record between: a transport whose own deadline passed. These bounds hold against a slow peer only if a whole `recv` obeys
     /// the timeout, as [`FramedStream`](crate::FramedStream)'s does. `coqui_peer::drive_messages_until`
     /// clears the timeout it used, so set a timeout of your own after the handshake. This sets the
     /// transport's read timeout, and leaves it at what it last needed.
@@ -352,6 +357,7 @@ impl PairingSession {
             (ours, theirs) => ours.or(theirs),
         }
         .and_then(|wait| Instant::now().checked_add(wait));
+        let mut early = 0_u32;
         loop {
             while let Some(message) = responder.transmit() {
                 transport.send(&self.session.seal(&message)?)?;
@@ -375,22 +381,30 @@ impl PairingSession {
                     };
                     match read {
                         Ok(record) => {
+                            early = 0;
                             let message = open_record(&mut self.session, &record)?;
                             responder.receive(&message)
                         }
                         Err(error) if timed_out(&error) => {
-                            if responder.deadline().is_some() {
-                                match responder.check_deadline() {
-                                    Err(refused) => Err(refused),
-                                    // An operating system may end a timed read a little early.
-                                    Ok(()) => continue,
-                                }
-                            } else if first_message.is_some_and(|until| Instant::now() < until) {
-                                continue;
+                            early += 1;
+                            // An operating system may end a timed read a little early, and a
+                            // transport whose own deadline passed ends every read at once: only
+                            // a few reads in a row with no record between are believed early.
+                            let early_read = early <= MAX_EARLY_TIMEOUTS;
+                            let in_time = if responder.deadline().is_some() {
+                                responder.check_deadline().map(|()| early_read)
                             } else {
-                                let record = self.session.seal(&EXPIRED_REFUSAL)?;
-                                let _ = transport.send(&record);
-                                Err(PairingError::Refused(PairRefusal::Expired))
+                                Ok(early_read
+                                    && first_message.is_some_and(|until| Instant::now() < until))
+                            };
+                            match in_time {
+                                Ok(true) => continue,
+                                Ok(false) => {
+                                    let record = self.session.seal(&EXPIRED_REFUSAL)?;
+                                    let _ = transport.send(&record);
+                                    Err(PairingError::Refused(PairRefusal::Expired))
+                                }
+                                Err(refused) => Err(refused),
                             }
                         }
                         Err(error) => return Err(error.into()),

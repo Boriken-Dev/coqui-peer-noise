@@ -1281,3 +1281,89 @@ fn what_is_looser_than_the_first_message_default_is_reported() {
     ))));
     assert!(listed(&method().with_first_message_timeout(None)));
 }
+
+/// A transport whose reads, after `pass` real ones, answer `TimedOut` at once, as a channel does
+/// once its own deadline passed. After `cap` of them it ends, so a loop without a bound stops.
+struct Spent {
+    pipe: Pipe,
+    pass: usize,
+    spent: usize,
+    cap: usize,
+}
+
+impl MessageTransport for Spent {
+    fn send(&mut self, message: &[u8]) -> io::Result<()> {
+        self.pipe.send(message)
+    }
+
+    fn recv(&mut self) -> io::Result<Vec<u8>> {
+        if self.pass > 0 {
+            self.pass -= 1;
+            return self.pipe.recv();
+        }
+        self.spent += 1;
+        if self.spent > self.cap {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        Err(io::ErrorKind::TimedOut.into())
+    }
+}
+
+impl ReadTimeout for Spent {
+    fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl CurrentReadTimeout for Spent {
+    fn current_read_timeout(&self) -> Option<Duration> {
+        None
+    }
+}
+
+#[test]
+fn reads_that_time_out_at_once_end_the_exchange_after_a_few_whatever_time_is_left() {
+    // Before the joiner's first message, and after it: the exchange's own clock has time left in
+    // both, and the transport's reads are spent.
+    for pass in [0, 1] {
+        let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let world = world();
+        let shown = world.desk.show_pin().unwrap();
+        let (near, far) = strangers(&joiner, &responder);
+        let (mut a, b) = pipes();
+        let serving = {
+            let (store, desk) = (world.store.clone(), world.desk.clone());
+            thread::spawn(move || {
+                let mut spent = Spent {
+                    pipe: b,
+                    pass,
+                    spent: 0,
+                    cap: 10_000,
+                };
+                let served = far.respond(&store, &desk, None, &mut spent).map(drop);
+                (served, spent.spent)
+            })
+        };
+        let joined = if pass == 0 {
+            // A stranger that proved a key and says nothing.
+            drop(near);
+            None
+        } else {
+            Some(
+                near.join(typed(shown.pin.as_str()), &mut a)
+                    .and_then(coqui_peer_noise::PairDial::finish)
+                    .map(drop),
+            )
+        };
+        let (served, reads) = serving.join().unwrap();
+        assert!(
+            is_refusal(&served, PairRefusal::Expired),
+            "{pass}: {served:?}"
+        );
+        assert!(reads <= 8, "{pass}: {reads} reads against a spent timeout");
+        // The joiner ends too, told or cut off, and the exchange accepted nobody.
+        assert!(joined.is_none_or(|joined| joined.is_err()));
+        assert!(!world.store.is_accepted(&joiner.peer_id()));
+        drop(a);
+    }
+}
