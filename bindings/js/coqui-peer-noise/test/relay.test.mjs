@@ -241,6 +241,14 @@ test('a binding is read when the call is made: a caller wiping it on return stil
   const [a, b] = await Promise.all([same, other]);
   const {reply} = await a.answer(await b.challenge(await a.hello()));
   await b.accept(reply);
+  const [seven, eight] = [wiped([9]), wiped([9])];
+  const pairingSame = createPairingInitiator(client, {binding: seven.buffer});
+  seven.done();
+  const pairingOther = createPairingResponder(server, {binding: eight.buffer});
+  eight.done();
+  const [c, d] = await Promise.all([pairingSame, pairingOther]);
+  const {reply: third} = await c.answer(await d.challenge(await c.hello()));
+  await d.accept(third);
 });
 
 test('a relay cutting at each record boundary is reported as truncation', async () => {
