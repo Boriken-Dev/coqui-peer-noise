@@ -177,15 +177,17 @@ a successful handshake.
 ```rust
 pub const PAIR_EXPORT_LABEL: &str = "EXPORTER-coqui-pair";
 pub const MAX_PAIRING_RECORD: usize = 350;    // the longest record of an exchange; for FramedStream::set_max_message
+pub const DEFAULT_FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct PairingMethod;                     // Clone; Debug
 impl PairingMethod {
     pub fn new(identity: Identity) -> PairingMethod;             // admits any proved key, in both roles
     pub fn with_responders(self, trust: Trust) -> PairingMethod; // a joiner verifies the responder
+    pub const fn with_first_message_timeout(self, timeout: Option<Duration>) -> PairingMethod; // no floor
     pub fn with_key_limit(self, bytes: u64) -> PairingMethod;
     pub fn with_rekey(self, rekey: bool) -> PairingMethod;
     pub fn with_random(self, random: Random) -> PairingMethod;
     pub fn identity(&self) -> &Identity;
-    pub fn weakened(&self) -> Vec<Weakening>;                    // always lists any-with-key-proof for initiators
+    pub fn weakened(&self) -> Vec<Weakening>;                    // always any-with-key-proof for initiators
 }
 impl coqui_peer::Method for PairingMethod { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct PairingHandshake;  // impl Handshake { Output = PairingSession, Framing::Message }
@@ -196,7 +198,7 @@ impl PairingSession {
     pub fn peer_id(&self) -> PeerId;
     pub fn pair_channel(&self) -> Result<pair::Channel, Error>;  // the proved key; no caller names it
     pub fn join<T: MessageTransport>(self, pairing: Pairing, transport: &mut T) -> Result<PairDial<'_, T>, Error>;
-    pub fn respond<T: MessageTransport + ReadTimeout>(self, store: &TrustStore, desk: &PairingDesk,
+    pub fn respond<T: MessageTransport + CurrentReadTimeout>(self, store: &TrustStore, desk: &PairingDesk,
         source: Option<SocketAddr>, transport: &mut T) -> Result<Paired, Error>;
 }
 impl<T: MessageTransport> PairDial<'_, T> {
@@ -208,9 +210,17 @@ impl<T: MessageTransport> PairDial<'_, T> {
 **A stranger's session is this type, and only this type.** `Noise` cannot admit an unknown key, and `PairingSession` cannot
 carry an application message, so what serves the application cannot be reached by proving just any key. Drive the handshake
 as `Noise`'s, then `join` or `respond`, which seal every message and end with a close record. `respond` blocks in
-`PairingDesk::wait` for the operator; each read waits until the exchange's deadline through `ReadTimeout`, and a joiner that
-goes quiet is told `Expired`. On success the responder has `accept_key`ed the joiner and the joiner stores `Paired::peer`.
-Then both reconnect under `Noise`, with `Trust::Store` or a pin, and the full key is what the handshake proves.
+`PairingDesk::wait` for the operator. On success the responder has `accept_key`ed the joiner and the joiner stores
+`Paired::peer`. Then both reconnect under `Noise`, with `Trust::Store` or a pin, and the full key is what the handshake
+proves.
+
+**A stranger's time is bounded.** Before the joiner's first message `respond` waits for the smaller of the transport's
+`current_read_timeout` and `with_first_message_timeout`, `DEFAULT_FIRST_MESSAGE_TIMEOUT` unless set, zero refusing with
+nothing read and `None` leaving only the transport's own. So ask a person for the PIN before connecting, or raise this. From
+that message each read waits until the desk's deadline. Either running out tells the joiner and returns
+`Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. Over a `FramedStream` the bound holds however slowly the bytes
+come; another transport must make a whole `recv` obey its timeout. `respond` sets the transport's read timeout, and
+leaves it at what it last needed.
 
 - **PIN** (feature `pin`): no pin needed: the PIN authenticates both keys and the session's binding. A wrong PIN is
   `Error::Pairing(PairingError::Refused(PairRefusal::WrongCode))` on both sides, and with the default one attempt burns the

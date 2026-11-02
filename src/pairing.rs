@@ -1,16 +1,20 @@
 use core::fmt;
 use core::net::SocketAddr;
+use core::time::Duration;
 use std::io;
+use std::time::Instant;
 
 use coqui_peer::pair::{
-    Channel, Paired, Pairing, PairingDesk, PairingJoiner, PairingResponder, Shown,
+    Channel, PairRefusal, Paired, Pairing, PairingDesk, PairingError, PairingJoiner,
+    PairingResponder, Shown,
 };
 use coqui_peer::{
     Established, Framing, Handshake, KeyMaterial, MessageTransport, Method, PeerId, Random,
-    ReadTimeout, TrustStore, Weakening,
+    TrustStore, Weakening,
 };
 
 use crate::error::Error;
+use crate::framed::CurrentReadTimeout;
 use crate::handshake::{METHOD, Noise, NoiseHandshake};
 use crate::identity::Identity;
 use crate::session::Session;
@@ -25,6 +29,14 @@ pub const PAIR_EXPORT_LABEL: &str = "EXPORTER-coqui-pair";
 /// [`set_max_message`](crate::FramedStream::set_max_message).
 pub const MAX_PAIRING_RECORD: usize = 350;
 
+/// How long a responder waits for a joiner's first message, unless told otherwise: a stranger who
+/// proved a key and says nothing holds a connection for this long, with no desk limit applying yet.
+pub const DEFAULT_FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `PROTOCOL.md`'s refused message: version, kind, why (expired). A [`PairingResponder`] has a
+/// deadline to refuse by only from the joiner's first message.
+const EXPIRED_REFUSAL: [u8; 3] = [1, 8, 2];
+
 /// The method for a connection that only pairs: the responder admits whoever proves a key, since a
 /// joiner is a stranger, and what it ends in is a [`PairingSession`], which carries the pairing
 /// exchange and nothing else. No application message can pass over it.
@@ -32,61 +44,93 @@ pub const MAX_PAIRING_RECORD: usize = 350;
 /// A joiner that knows who it is reaching says so with
 /// [`with_responders`](PairingMethod::with_responders); an invitation and the device flow need it.
 #[derive(Clone)]
-pub struct PairingMethod(Noise);
+pub struct PairingMethod {
+    noise: Noise,
+    first_message_timeout: Option<Duration>,
+}
 
 impl PairingMethod {
     /// A method for `identity`, as a responder admitting any proved key, and as a joiner accepting
     /// any proved key until [`with_responders`](PairingMethod::with_responders).
     #[must_use]
     pub fn new(identity: Identity) -> Self {
-        Self(Noise::admitting_anyone(identity))
+        Self {
+            noise: Noise::admitting_anyone(identity),
+            first_message_timeout: Some(DEFAULT_FIRST_MESSAGE_TIMEOUT),
+        }
     }
 
     /// Whom a joiner accepts: a pin or a store. The session is then verified, which the device flow
     /// asks for; the key an invitation names must be the proved one in any case.
     #[must_use]
-    pub fn with_responders(self, trust: Trust) -> Self {
-        Self(self.0.with_responders(trust))
+    pub fn with_responders(mut self, trust: Trust) -> Self {
+        self.noise = self.noise.with_responders(trust);
+        self
+    }
+
+    /// How long [`PairingSession::respond`] waits for the joiner's first message; a timeout set on
+    /// the transport still applies if it is shorter. [`DEFAULT_FIRST_MESSAGE_TIMEOUT`] by default, and
+    /// no floor: zero refuses as expired without reading. `None` leaves the transport's own timeout as
+    /// the only bound, and over a transport with none a silent stranger holds it until it closes.
+    /// Anything above the default is reported by [`weakened`](PairingMethod::weakened).
+    #[must_use]
+    pub const fn with_first_message_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.first_message_timeout = timeout;
+        self
     }
 
     /// As [`Noise::with_key_limit`].
     #[must_use]
-    pub fn with_key_limit(self, bytes: u64) -> Self {
-        Self(self.0.with_key_limit(bytes))
+    pub fn with_key_limit(mut self, bytes: u64) -> Self {
+        self.noise = self.noise.with_key_limit(bytes);
+        self
     }
 
     /// As [`Noise::with_rekey`].
     #[must_use]
-    pub fn with_rekey(self, rekey: bool) -> Self {
-        Self(self.0.with_rekey(rekey))
+    pub fn with_rekey(mut self, rekey: bool) -> Self {
+        self.noise = self.noise.with_rekey(rekey);
+        self
     }
 
     /// As [`Noise::with_random`]. The PAKE's own random source is the
     /// [`Pairing`]'s and the [`PairingDesk`]'s.
     #[must_use]
-    pub fn with_random(self, random: Random) -> Self {
-        Self(self.0.with_random(random))
+    pub fn with_random(mut self, random: Random) -> Self {
+        self.noise = self.noise.with_random(random);
+        self
     }
 
     /// This method's identity.
     #[must_use]
     pub fn identity(&self) -> &Identity {
-        self.0.identity()
+        self.noise.identity()
     }
 
     /// The settings looser than their strict default. A responder here always admits any proved
     /// key, so that is always listed.
     #[must_use]
     pub fn weakened(&self) -> Vec<Weakening> {
-        self.0.weakened()
+        let mut weakened = self.noise.weakened();
+        let strict = DEFAULT_FIRST_MESSAGE_TIMEOUT.as_secs().to_string();
+        match self.first_message_timeout {
+            None => weakened.push(Weakening::new("first_message_timeout", "none", strict)),
+            Some(timeout) if timeout > DEFAULT_FIRST_MESSAGE_TIMEOUT => {
+                let value = timeout.as_secs().to_string();
+                weakened.push(Weakening::new("first_message_timeout", value, strict));
+            }
+            Some(_) => {}
+        }
+        weakened
     }
 }
 
 impl fmt::Debug for PairingMethod {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_tuple("PairingMethod")
-            .field(&self.0)
+            .debug_struct("PairingMethod")
+            .field("noise", &self.noise)
+            .field("first_message_timeout", &self.first_message_timeout)
             .finish()
     }
 }
@@ -106,9 +150,10 @@ impl Method for PairingMethod {
     /// [`Error::Random`] when the generator fails.
     fn initiate(&self) -> Result<PairingHandshake, Error> {
         Ok(PairingHandshake {
-            handshake: self.0.initiate()?,
-            local: self.0.identity().key_material(),
-            verified: self.0.verifies_responders(),
+            handshake: self.noise.initiate()?,
+            local: self.noise.identity().key_material(),
+            verified: self.noise.verifies_responders(),
+            first_message_timeout: self.first_message_timeout,
         })
     }
 
@@ -119,9 +164,10 @@ impl Method for PairingMethod {
     /// None in practice: this role is always configured.
     fn respond(&self, source: Option<SocketAddr>) -> Result<PairingHandshake, Error> {
         Ok(PairingHandshake {
-            handshake: self.0.respond(source)?,
-            local: self.0.identity().key_material(),
+            handshake: self.noise.respond(source)?,
+            local: self.noise.identity().key_material(),
             verified: false,
+            first_message_timeout: self.first_message_timeout,
         })
     }
 }
@@ -131,6 +177,7 @@ pub struct PairingHandshake {
     handshake: NoiseHandshake,
     local: KeyMaterial,
     verified: bool,
+    first_message_timeout: Option<Duration>,
 }
 
 impl fmt::Debug for PairingHandshake {
@@ -173,6 +220,7 @@ impl Handshake for PairingHandshake {
                 local: self.local,
                 peer: proved,
                 verified: self.verified,
+                first_message_timeout: self.first_message_timeout,
             },
         })
     }
@@ -194,6 +242,7 @@ pub struct PairingSession {
     local: KeyMaterial,
     peer: KeyMaterial,
     verified: bool,
+    first_message_timeout: Option<Duration>,
 }
 
 impl fmt::Debug for PairingSession {
@@ -273,14 +322,19 @@ impl PairingSession {
     /// is accepted in `store`. `source` is what the desk throttles by; behind a reverse proxy, pass
     /// the client's address from a header you trust, or every joiner counts as the proxy.
     ///
-    /// Each read waits at most until the exchange's deadline, through `ReadTimeout`, and a read
-    /// that times out ends the exchange then; before the first message the transport's own timeout
-    /// applies.
+    /// The joiner has until the smaller of the transport's own timeout, as
+    /// [`CurrentReadTimeout`] reports it, and [`PairingMethod::with_first_message_timeout`] to send
+    /// its first message. From that message each read waits at most until the exchange's deadline,
+    /// the desk's. When either runs out the joiner is told, and this is
+    /// `Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. A time already spent is expired
+    /// at once, with nothing read. These bounds hold against a slow peer only if a whole `recv` obeys
+    /// the timeout, as [`FramedStream`](crate::FramedStream)'s does. This sets the transport's read
+    /// timeout, and leaves it at what it last needed.
     ///
     /// # Errors
     ///
     /// As [`join`](PairingSession::join).
-    pub fn respond<T: MessageTransport + ReadTimeout>(
+    pub fn respond<T: MessageTransport + CurrentReadTimeout>(
         mut self,
         store: &TrustStore,
         desk: &PairingDesk,
@@ -288,6 +342,11 @@ impl PairingSession {
         transport: &mut T,
     ) -> Result<Paired, Error> {
         let mut responder = PairingResponder::new(self.pair_channel()?, store, desk, source);
+        let first_message = match (self.first_message_timeout, transport.current_read_timeout()) {
+            (Some(ours), Some(theirs)) => Some(ours.min(theirs)),
+            (ours, theirs) => ours.or(theirs),
+        }
+        .and_then(|wait| Instant::now().checked_add(wait));
         loop {
             while let Some(message) = responder.transmit() {
                 transport.send(&self.session.seal(&message)?)?;
@@ -298,16 +357,37 @@ impl PairingSession {
             let step = match responder.awaiting() {
                 Some(ticket) => responder.resume(desk.wait(ticket)),
                 None => {
-                    transport.set_read_timeout(responder.time_left())?;
-                    match transport.recv() {
+                    let left = responder.time_left().or_else(|| {
+                        first_message.map(|until| until.saturating_duration_since(Instant::now()))
+                    });
+                    let read = match left {
+                        // A spent time, which a `TcpStream` refuses as a timeout.
+                        Some(left) if left.is_zero() => Err(io::ErrorKind::TimedOut.into()),
+                        Some(left) => transport
+                            .set_read_timeout(Some(left))
+                            .and_then(|()| transport.recv()),
+                        None => transport.recv(),
+                    };
+                    match read {
                         Ok(record) => {
                             let message = self.session.open(&record)?.ok_or(Error::Truncated)?;
                             responder.receive(&message)
                         }
-                        Err(error) if timed_out(&error) => match responder.check_deadline() {
-                            Err(refused) => Err(refused),
-                            Ok(()) => return Err(error.into()),
-                        },
+                        Err(error) if timed_out(&error) => {
+                            if responder.deadline().is_some() {
+                                match responder.check_deadline() {
+                                    Err(refused) => Err(refused),
+                                    // An operating system may end a timed read a little early.
+                                    Ok(()) => continue,
+                                }
+                            } else if first_message.is_some_and(|until| Instant::now() < until) {
+                                continue;
+                            } else {
+                                let record = self.session.seal(&EXPIRED_REFUSAL)?;
+                                let _ = transport.send(&record);
+                                Err(PairingError::Refused(PairRefusal::Expired))
+                            }
+                        }
                         Err(error) => return Err(error.into()),
                     }
                 }
