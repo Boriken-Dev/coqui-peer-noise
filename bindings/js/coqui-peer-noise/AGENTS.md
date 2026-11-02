@@ -62,7 +62,7 @@ export const __testing;            // not API: the layer beneath, for the publis
   throws.
 - `ephemeral`: replacing the generator, **for test vectors only**.
 
-The module reads `seal` and `open` input when called, so the caller may reuse its buffer. Calls made together take
+The module reads `seal` and `open` input, and the options, when called, so the caller may reuse its buffer. Calls made together take
 their place in call order.
 
 An identity's private key must be non-extractable and X25519, and `peerId` must be the hash of `publicKey`, or
