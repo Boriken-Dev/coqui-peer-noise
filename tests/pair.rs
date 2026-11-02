@@ -643,6 +643,35 @@ fn a_run_of_one_purpose_fails_at_the_second_message_against_the_other() {
 }
 
 #[test]
+fn a_record_longer_than_any_of_the_exchange_is_refused_before_it_is_opened() {
+    let world = world();
+    world.desk.show_pin().unwrap();
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let protocol =
+        |result: &Result<(), Error>| matches!(result, Err(Error::Pairing(PairingError::Protocol)));
+    let serve = |length: usize| {
+        let (_near, far) = strangers(&joiner, &responder);
+        let (mut a, mut b) = pipes();
+        a.send(&vec![0u8; length]).unwrap();
+        far.respond(&world.store, &world.desk, None, &mut b)
+            .map(drop)
+    };
+    let served = serve(MAX_PAIRING_RECORD + 1);
+    assert!(protocol(&served), "{served:?}");
+    // At the limit it is opened, and fails as any bad record does.
+    assert!(matches!(serve(MAX_PAIRING_RECORD), Err(Error::Record)));
+    let join = |length: usize| {
+        let (near, _far) = strangers(&joiner, &responder);
+        let (mut a, mut b) = pipes();
+        b.send(&vec![0u8; length]).unwrap();
+        near.join(typed("123456"), &mut a).map(drop)
+    };
+    let joined = join(MAX_PAIRING_RECORD + 1);
+    assert!(protocol(&joined), "{joined:?}");
+    assert!(matches!(join(MAX_PAIRING_RECORD), Err(Error::Record)));
+}
+
+#[test]
 fn the_methods_refuse_each_others_gaps() {
     let identity = Identity::generate().unwrap();
     let other = Identity::generate().unwrap();

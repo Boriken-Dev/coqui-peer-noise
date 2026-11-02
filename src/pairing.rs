@@ -370,7 +370,7 @@ impl PairingSession {
                     };
                     match read {
                         Ok(record) => {
-                            let message = self.session.open(&record)?.ok_or(Error::Truncated)?;
+                            let message = open_record(&mut self.session, &record)?;
                             responder.receive(&message)
                         }
                         Err(error) if timed_out(&error) => {
@@ -407,6 +407,15 @@ impl PairingSession {
     }
 }
 
+/// The message of a record of the exchange. What is too long to be one is not opened: a stranger's
+/// record costs a decryption only if it can be what it should.
+fn open_record(session: &mut Session, record: &[u8]) -> Result<Vec<u8>, Error> {
+    if record.len() > MAX_PAIRING_RECORD {
+        return Err(PairingError::Protocol.into());
+    }
+    session.open(record)?.ok_or(Error::Truncated)
+}
+
 fn timed_out(error: &io::Error) -> bool {
     matches!(
         error.kind(),
@@ -437,7 +446,7 @@ impl<T: MessageTransport> PairDial<'_, T> {
                 return Ok(());
             }
             let record = self.transport.recv()?;
-            let message = self.session.open(&record)?.ok_or(Error::Truncated)?;
+            let message = open_record(&mut self.session, &record)?;
             if let Err(error) = self.joiner.receive(&message) {
                 // The responder is told why, as far as the transport still takes it.
                 while let Some(message) = self.joiner.transmit() {

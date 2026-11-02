@@ -30,5 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `createPairingInitiator`, `createPairingResponder` and `createPairingDesk` in the JavaScript module: a typed PIN in both
   roles, the same bytes as Rust, over `BigInt` arithmetic that is not constant-time. `firstMessageTimeout` and
   `DEFAULT_FIRST_MESSAGE_TIMEOUT` bound how long a stranger may say nothing, and it is told `expired` when that runs out.
+- `weakened()` on what the JavaScript module's starters give and on its desk, and `MAX_PAIRING_RECORD`, as in Rust.
 - `tests/vectors/pairing.json` and `tests/vectors/spake2.json`.
 - `tools/proxy-run`: a real nginx between a real browser and the Rust side, by hand and not in CI.

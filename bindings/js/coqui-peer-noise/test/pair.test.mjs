@@ -7,7 +7,7 @@ import {readFileSync} from 'node:fs';
 import {webcrypto} from 'node:crypto';
 import {
   createInitiator, createPairingDesk, createPairingInitiator, createPairingResponder, createResponder,
-  DEFAULT_KEY_LIMIT, generateIdentity, importIdentity, PROFILE, __testing,
+  DEFAULT_FIRST_MESSAGE_TIMEOUT, DEFAULT_KEY_LIMIT, generateIdentity, importIdentity, MAX_PAIRING_RECORD, PROFILE, __testing,
 } from '../src/index.mjs';
 import {keyPairOf, toHex, unhex} from './support.mjs';
 
@@ -604,6 +604,71 @@ test('a confirmation with no PIN behind it does not pass: right bytes need the r
   await run.sendTag();
   await assert.rejects(run.serving, {refusal: 'wrong-code'});
   assert.deepEqual(run.accepted, []);
+});
+
+test('a record longer than any of the exchange is refused before it is opened, in both roles', async () => {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  const desk = createPairingDesk();
+  desk.showPin();
+  const fed = (record, sent = []) => ({async send(bytes) { sent.push(bytes); }, async recv() { return record; }});
+  const serve = async record => {
+    const {atResponder} = await strangers(joiner, responder);
+    return atResponder.respond(desk, fed(record), {accept: async () => assert.fail('not accepted')});
+  };
+  const join = async record => {
+    const {atJoiner} = await strangers(joiner, responder);
+    return atJoiner.join('123456', fed(record));
+  };
+  for (const run of [serve, join]) {
+    for (const record of [new Uint8Array(MAX_PAIRING_RECORD + 1), new ArrayBuffer(MAX_PAIRING_RECORD + 1)]) {
+      await assert.rejects(run(record), /malformed/, 'not opened: a bad record says it does not open');
+    }
+    // At the limit it is opened, and fails as any bad record does.
+    await assert.rejects(run(new Uint8Array(MAX_PAIRING_RECORD)), /does not open/);
+  }
+  assert.equal(MAX_PAIRING_RECORD, 350);
+  // A whole sealed record of 32 MiB, from a peer that proved any key, is refused the same way.
+  const {session, pairing} = await againstResponder(joiner, responder);
+  const huge = await session.seal(new Uint8Array(32 << 20));
+  await assert.rejects(pairing.respond(desk, fed(huge), {accept: async () => assert.fail('not accepted')}), /malformed/);
+});
+
+test('weakened() names each setting looser than its default, and nothing else', async () => {
+  const [a, b] = [await generateIdentity(), await generateIdentity()];
+  const names = object => object.weakened().map(({setting}) => setting);
+  const replaced = async () => webcrypto.subtle.generateKey('X25519', false, ['deriveBits']);
+  assert.deepEqual(names(await createInitiator(a, b.peerId)), []);
+  assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: DEFAULT_KEY_LIMIT})), []);
+  assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: 16})), []);
+  assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: DEFAULT_KEY_LIMIT + 1})), ['keyLimit']);
+  assert.deepEqual(names(await createInitiator(a, b.peerId, {rekey: false})), ['rekey']);
+  assert.deepEqual(names(await createInitiator(a, b.peerId, {ephemeral: replaced})), ['ephemeral']);
+  assert.deepEqual(names(await createResponder(b, {allowClient: async () => true, rekey: false})), ['rekey']);
+  assert.deepEqual((await createInitiator(a, b.peerId, {rekey: false})).weakened(), [{setting: 'rekey', value: 'off', strict: 'on'}]);
+
+  // What only pairs says so, as Rust's does.
+  assert.deepEqual(names(await createPairingInitiator(a)), ['responders']);
+  assert.deepEqual(names(await createPairingInitiator(a, {responder: b.peerId})), []);
+  assert.deepEqual(names(await createPairingInitiator(a, {responder: b.peerId, random: () => new Uint8Array(64)})), ['random']);
+  assert.deepEqual(names(await createPairingResponder(b)), ['initiators']);
+  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: 0})), ['initiators']);
+  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: DEFAULT_FIRST_MESSAGE_TIMEOUT})), ['initiators']);
+  assert.deepEqual(
+    names(await createPairingResponder(b, {firstMessageTimeout: DEFAULT_FIRST_MESSAGE_TIMEOUT + 1, rekey: false})),
+    ['rekey', 'initiators', 'firstMessageTimeout'],
+  );
+
+  // The desk, by what a guess's chance and a PIN's life come to.
+  assert.deepEqual(names(createPairingDesk()), []);
+  assert.deepEqual(names(createPairingDesk({pinLength: 7, pinTtl: 1})), []);
+  assert.deepEqual(names(createPairingDesk({pinLength: 1})), ['pinCombinations']);
+  assert.deepEqual(createPairingDesk({pinLength: 1}).weakened(), [{setting: 'pinCombinations', value: '10', strict: '1000000'}]);
+  assert.deepEqual(names(createPairingDesk({pinAlphabet: '01'})), ['pinCombinations']);
+  assert.deepEqual(names(createPairingDesk({pinAlphabet: '01', pinLength: 20})), []);
+  assert.deepEqual(names(createPairingDesk({pinAttempts: 2})), ['pinAttempts']);
+  assert.deepEqual(names(createPairingDesk({pinTtl: 600_001})), ['pinTtl']);
+  assert.deepEqual(names(createPairingDesk({random: () => new Uint8Array(4)})), ['random']);
+  assert.deepEqual(names(createPairingDesk({now: () => 0})), ['now']);
 });
 
 /** The responder's answer to a first message, with a desk that has a PIN unless told otherwise. */

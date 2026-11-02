@@ -223,6 +223,9 @@ that message each read waits until the desk's deadline. Either running out tells
 come; another transport must make a whole `recv` obey its timeout. `respond` sets the transport's read timeout, and
 leaves it at what it last needed.
 
+A record longer than `MAX_PAIRING_RECORD` is `Error::Pairing(PairingError::Protocol)` without being opened, whatever the
+transport lets through.
+
 - **PIN** (feature `pin`): no pin needed: the PIN authenticates both keys and the session's binding. A wrong PIN is
   `Error::Pairing(PairingError::Refused(PairRefusal::WrongCode))` on both sides, and with the default one attempt burns the
   PIN, so `desk.show_pin()` again and start over on a new connection and session.

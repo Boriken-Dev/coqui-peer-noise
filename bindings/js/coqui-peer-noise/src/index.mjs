@@ -528,7 +528,21 @@ function options({keyLimit = DEFAULT_KEY_LIMIT, rekey = true, binding = new Uint
     rekey,
     binding: binding.slice(),
     ephemeral: ephemeral ?? (() => subtle().generateKey(X25519, false, ['deriveBits'])),
+    ephemeralReplaced: ephemeral !== undefined,
   };
+}
+
+/** One setting looser than its default, as Rust's `Weakening`: reported, never refused. */
+function weakening(setting, value, strict) {
+  return Object.freeze({setting, value: String(value), strict: String(strict)});
+}
+
+function weakenedSettings(settings) {
+  const found = [];
+  if (settings.keyLimit > DEFAULT_KEY_LIMIT) found.push(weakening('keyLimit', settings.keyLimit, DEFAULT_KEY_LIMIT));
+  if (!settings.rekey) found.push(weakening('rekey', 'off', 'on'));
+  if (settings.ephemeralReplaced) found.push(weakening('ephemeral', "caller's", "the engine's"));
+  return found;
 }
 
 // What a run is for, second in the prologue, so a run for one fails against the other at its second
@@ -595,11 +609,16 @@ export async function importIdentity(pkcs8) {
   return identityOf(publicKey, privateKey, await peerIdOf(publicKey));
 }
 
-/** The dialling side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
-async function dialling(local, purpose, settings, admit, finish) {
+/**
+ * The dialling side's state machine; `admit` decides on the proved id, and `finish` gives the result.
+ * `looser` is what a caller adds to `weakened()`.
+ */
+async function dialling(local, purpose, settings, looser, admit, finish) {
   const handshake = await newHandshake(true, prologueOf(purpose, settings), local, await newEphemeral(settings));
   let state = 'start';
   return Object.freeze({
+    /** The settings looser than their default: `[{setting, value, strict}]`. */
+    weakened: () => [...weakenedSettings(settings), ...looser],
     /** The first message. */
     async hello() {
       if (state !== 'start') throw new Error('Unexpected hello');
@@ -630,11 +649,13 @@ async function dialling(local, purpose, settings, admit, finish) {
   });
 }
 
-/** The accepting side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
-async function accepting(local, purpose, settings, admit, finish) {
+/** As `dialling`, for the accepting side. */
+async function accepting(local, purpose, settings, looser, admit, finish) {
   let state = 'first';
   let handshake;
   return Object.freeze({
+    /** The settings looser than their default: `[{setting, value, strict}]`. */
+    weakened: () => [...weakenedSettings(settings), ...looser],
     /** Takes the first message, and gives the second. */
     async challenge(raw) {
       if (state !== 'first') throw new Error('Unexpected hello');
@@ -685,7 +706,7 @@ export async function createInitiator(identity, expectedPeerId, config) {
   const settings = options(config);
   const local = await checkIdentity(identity);
   if (!PEER_ID.test(expectedPeerId ?? '')) throw new Error('A pinned responder id is required');
-  return dialling(local, PURPOSE_ORDINARY, settings, async id => {
+  return dialling(local, PURPOSE_ORDINARY, settings, [], async id => {
     if (id !== expectedPeerId) throw new Error('Responder is not pinned');
   }, async session => ({session}));
 }
@@ -698,7 +719,7 @@ export async function createResponder(identity, {allowClient, ...config} = {}) {
   const settings = options(config);
   const local = await checkIdentity(identity);
   if (typeof allowClient !== 'function') throw new Error('An explicit trust decision is required');
-  return accepting(local, PURPOSE_ORDINARY, settings, async id => {
+  return accepting(local, PURPOSE_ORDINARY, settings, [], async id => {
     if (await allowClient(id) !== true) throw new Error('Client is not paired');
   }, async session => ({session}));
 }
@@ -889,6 +910,8 @@ const OUT_OF_PLACE = 'A pairing message is malformed or unexpected';
 export const DEFAULT_FIRST_MESSAGE_TIMEOUT = 60_000;
 // setTimeout takes at most this, and fires at once above it.
 const MAX_TIMER = 2 ** 31 - 1;
+// The longest record of an exchange, as in Rust; this module's own messages are shorter.
+export const MAX_PAIRING_RECORD = 350;
 
 function refusal(name) {
   return Object.assign(new Error(`The pairing was refused: ${name}`), {refusal: name});
@@ -974,16 +997,22 @@ function checkTransport(transport) {
   }
 }
 
-/** A transport's next record; its end, before the exchange's, is what a cut looks like. */
+/**
+ * A transport's next record; its end, before the exchange's, is what a cut looks like. What is too long
+ * to be a record of the exchange is not opened: a stranger's record costs a decryption only if it can be
+ * what it should.
+ */
 async function nextMessage(session, transport) {
   const record = await transport.recv();
   if (record === null || record === undefined) throw new Error('The stream was truncated: the exchange did not finish');
+  if (record.byteLength > MAX_PAIRING_RECORD) throw new Error(OUT_OF_PLACE);
   const message = await session.open(record);
   if (message === null) throw new Error('The stream was truncated: the peer closed before the exchange finished');
   return message;
 }
 
 const pairDesks = new WeakMap();
+const DESK_DEFAULTS = Object.freeze({combinations: 10 ** 6, pinAttempts: 1, pinTtl: 600_000});
 
 /**
  * Where a responder keeps the PIN it shows. Options, each with a default and no floor:
@@ -1021,6 +1050,19 @@ export function createPairingDesk({
     }
   };
   const desk = Object.freeze({
+    /** The options looser than their default: `[{setting, value, strict}]`. */
+    weakened() {
+      const found = [];
+      const combinations = alphabet.length ** pinLength;
+      if (combinations < DESK_DEFAULTS.combinations) {
+        found.push(weakening('pinCombinations', combinations, DESK_DEFAULTS.combinations));
+      }
+      if (pinAttempts > DESK_DEFAULTS.pinAttempts) found.push(weakening('pinAttempts', pinAttempts, DESK_DEFAULTS.pinAttempts));
+      if (pinTtl > DESK_DEFAULTS.pinTtl) found.push(weakening('pinTtl', pinTtl, DESK_DEFAULTS.pinTtl));
+      if (random !== OS_RANDOM) found.push(weakening('random', "caller's", "the engine's"));
+      if (now !== Date.now) found.push(weakening('now', "caller's", 'Date.now'));
+      return found;
+    },
     /** Shows a new PIN, replacing any before it, with its attempts. */
     showPin() {
       let pin = '';
@@ -1227,7 +1269,10 @@ export async function createPairingInitiator(identity, {responder, random = OS_R
   const settings = options(config);
   const local = await checkIdentity(identity);
   if (responder !== undefined && !PEER_ID.test(responder)) throw new Error('A pinned responder id is required');
-  return dialling(local, PURPOSE_PAIR, settings, async id => {
+  const looser = [];
+  if (responder === undefined) looser.push(weakening('responders', 'any-with-key-proof', 'pinned'));
+  if (random !== OS_RANDOM) looser.push(weakening('random', "caller's", "the engine's"));
+  return dialling(local, PURPOSE_PAIR, settings, looser, async id => {
     if (responder !== undefined && id !== responder) throw new Error('Responder is not pinned');
   }, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, responder !== undefined, random),
@@ -1247,7 +1292,11 @@ export async function createPairingResponder(identity, {firstMessageTimeout = DE
   }
   const settings = options(config);
   const local = await checkIdentity(identity);
-  return accepting(local, PURPOSE_PAIR, settings, async () => {}, async (session, remote) => ({
+  const looser = [weakening('initiators', 'any-with-key-proof', 'pinned')];
+  if (firstMessageTimeout > DEFAULT_FIRST_MESSAGE_TIMEOUT) {
+    looser.push(weakening('firstMessageTimeout', firstMessageTimeout, DEFAULT_FIRST_MESSAGE_TIMEOUT));
+  }
+  return accepting(local, PURPOSE_PAIR, settings, looser, async () => {}, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM, firstMessageTimeout),
   }));
 }
