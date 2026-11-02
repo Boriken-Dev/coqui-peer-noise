@@ -35,6 +35,14 @@ An endpoint uses one method, chosen by its operator and never negotiated on the 
 
 The two have different keys and so different ids.
 
+## Pairing
+
+Two strangers come to accept each other's keys through a session that carries nothing else: a person reads a short PIN on
+one side and types it on the other, and both run SPAKE2 sealed inside the session, bound to it. Afterwards each reconnects
+under the ordinary method, and the full key is what the handshake proves. A carrier gets one guess at the PIN per run, and a
+wrong guess uses up the PIN. Rust has the invitation and the device flow as well; the JavaScript module has the typed PIN, in
+both roles, over `BigInt` arithmetic that is not constant-time. `PROTOCOL.md` says what that leaves open.
+
 ## How a key becomes an id
 
 The Noise static key is the identity, with no signing key beside it. Its id is the SHA-256 of its RFC 8410 public key,

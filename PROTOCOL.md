@@ -3,7 +3,8 @@
 **Status:** experimental. It has had no independent security review and is not an IETF or ACP
 standard. Implementations: Rust (`src/`) and JavaScript (`bindings/js/coqui-peer-noise/`), checked
 against each other, against `snow` (a third implementation of this Noise protocol, in the Rust tests),
-against the published vectors in `tests/vectors/published.json` and against `tests/vectors/session.json`.
+against the published vectors in `tests/vectors/published.json` and against `tests/vectors/session.json`
+and `tests/vectors/pairing.json`.
 
 ## What this is
 
@@ -26,9 +27,29 @@ encryption to a known recipient with strong forward secrecy. Kobeissi, Nicolas a
 Explorer" (ePrint 2018/766), say in their abstract that they confirm the stated security goals of the 12
 fundamental patterns, of which section 7.5 lists XX as one. Girol et al., "A Spectral Analysis of Noise"
 (USENIX Security 2020), compute the strongest threat model per pattern. Only those abstracts and the
-specification were read for this document. Neither paper covers what this profile adds above Noise: the
-prologue's form, the record framing, the close record, the key change, the export secret, or how keys
-become ids.
+specification were read for this document.
+
+### What is ours, and what nobody has analysed
+
+**Only the first row rests on published analysis.** Everything below it is this profile's or `coqui-peer`'s, built by
+reading the sources named here and argued in this document, with no proof and no review. The papers above do not cover it.
+
+| Piece | Whose | State |
+| --- | --- | --- |
+| Pattern XX with X25519, AES-256-GCM and SHA-256 | Noise specification | Analysed, as far as the abstracts above say |
+| [Prologue](#handshake): two length-prefixed fields | Ours; section 6 allows a prologue | Its form not analysed |
+| Refusing a small-order key, a second encoding, a payload, another length | Ours; stricter than the specification | Argued under [Handshake](#handshake) and [Identity](#identity) |
+| A key's id: SHA-256 of its RFC 8410 SPKI | Ours | Argued under [Identity](#identity) |
+| [Records](#records): a type byte inside the AEAD, parts, one shape per message | Ours | Not analysed |
+| [The close record](#the-sealed-close) | Ours; section 14 leaves truncation to the application | Not analysed |
+| [The key change](#limits-and-key-changes): `REKEY` is section 4.2's; announcing it in-band, by limit, is ours | Ours around the specification's function | Not analysed |
+| [Export secret](#session-id-and-exports): a third output of `Split`'s HKDF, `Split` asks for two | Ours | Not analysed; rests on HKDF's outputs being independent |
+| [Exports](#session-id-and-exports) | Ours | Not analysed |
+| [Trust](#identity): pins, the store, waiting, rotation | `coqui-peer` | Not analysed |
+| [Pairing](#pairing): the exchange, its messages, its confirmation | `coqui-peer` | Not analysed |
+| A PIN exchange **inside** an XX session whose peer may be anyone, bound by an export | Ours, as `coqui-peer-webcrypto` does it | **The composition is not analysed**: nothing shows XX and SPAKE2 together give what each gives alone |
+| SPAKE2: the `spake2` crate's constants M and N, its hash of the password, its side bytes, its key | That crate, version 0.4 | Only its source was read. It was not compared with RFC 9382 |
+| [The JavaScript SPAKE2](#pairing): Edwards25519 over `BigInt`, written here to match that crate | Ours | **Written from that crate's source, not constant-time**, checked only by the answers listed there |
 
 The method is chosen per endpoint and never negotiated on one, so nothing on the path can talk it down.
 A peer running another method fails the handshake.
@@ -122,7 +143,7 @@ What A costs:
 - **`TrustStore`.** It compares the whole `KeyMaterial`, so the same bytes stored under another method are
   not this key. A responder records a stranger as waiting only after the proof, per its pairing contract.
 - **Pairing.** `coqui_peer::pair`'s `Channel` wants `local` and `remote` as `KeyMaterial` and a `binding`, and
-  this gives them: the proved key and an export. Running it inside a session is not in this version.
+  this gives them: the proved key and an export. See [Pairing](#pairing).
 - **`.acp`.** `docs/browser.md` in coqui-acp has `AcpIdentity { peer, verified, method }`, with `method` as "any
   proof's name, not a fixed list": `peer` is the id above, `method` is `noise`. `verified` may be true, since
   "every message after the proof is protected by keys that came out of it".
@@ -281,6 +302,104 @@ why it is opt-in and never derived automatically. It is fixed once the first mes
 Section 6 of the specification notes the prologue does not go into the encryption keys, only `h`. This uses it
 for what that section says it is for, confirming both sides saw the same thing.
 
+### What was run through a proxy
+
+`tools/proxy-run` runs this for real. **nginx 1.30.6** (Fedora 44's aarch64 package, in WSL2, built against OpenSSL 3.5.9
+and running with 3.5.7) ended TLS 1.3 and passed WebSocket to a relay, with a configuration holding only what a WebSocket
+proxy needs. Chrome 156 and Edge 156, headless on Windows ARM64, were one end, in a secure context on the proxy's origin.
+The Rust examples were the other, their frames carried to the proxy by a small client in that tool, because the crate has
+no WebSocket. All 16 scenarios passed in both browsers, on Node 24 with Chrome and Node 22 with Edge: both roles, a record of
+700 KB, a record altered, repeated and injected, a cut at a record boundary, a swallowed close, nginx's own read timeout
+ending an idle stream, and PIN pairing followed by the ordinary method. Each of the 30 connections the relay took was plain,
+from nginx. What the run shows about a proxy:
+
+- **nginx passes a record whole and unchanged**, and needs no setting for this method.
+- **A clean WebSocket close says nothing.** With a close code and `wasClean` true, the module still reported truncation
+  where no close record came, which is the case the [sealed close](#the-sealed-close) exists for.
+- **A proxy's read timeout looks like a cut**, because it is one. A host whose streams idle keeps them moving itself, or
+  expects to reconnect.
+
+No other proxy, nginx version or operating system has been run, and neither has Firefox or Safari.
+
+## Pairing
+
+`coqui_peer::pair` runs on a session of its own, bound to the session and not to any TLS beneath it. A joiner is a
+stranger, so the responder admits any proved key for this. Both languages enforce what follows from that by what they
+offer: such a handshake ends in a pairing session (`PairingSession` in Rust, `pairing` in JavaScript), which holds the
+proved key and runs one exchange, and has no way to carry an application message. A session that can carry one exists
+only with a peer a pin or a trust store admitted. Each message is one record. Once paired, both sides close and reconnect
+under the ordinary method, and the full key is what the handshake proves.
+
+The `Channel` is `local` this side's key, `remote` the key the handshake proved, which no caller names, `binding` a 32-byte
+[export](#session-id-and-exports) under `EXPORTER-coqui-pair`, and `verified` when the joiner admitted the responder by a
+pin or a store.
+
+- **PIN.** A proved key of anyone is enough: the PIN authenticates both keys and the binding. A relay forwarding everything
+  pairs the real parties with each other and learns nothing but sizes. A relay forwarding between two sessions of its own
+  fails at the first message, since the keys differ. A relay that runs the exchange itself with each side, under its own
+  key, has one guess at the PIN per run: with the default of one attempt per PIN, a wrong guess burns it.
+- **Invitation** (Rust). The secret goes as is, so the proved key must be the inviter's: `Pairing::join` refuses otherwise
+  before anything is sent, and the secret goes only inside a record.
+- **Device flow** (Rust). The joiner must have verified the responder by a pin or a store, or `join` refuses unless told
+  `allow_unverified`, which lets a relay pair in place of both sides.
+
+**What a person must take from this.** The PIN is the whole of the authentication between strangers, and it is short. Its
+strength is one guess in the number of codes per PIN shown (10^6 by default) and it rests on the attempts being counted,
+so a responder that raises `pin_attempts` raises that chance in proportion. A joiner that a person never gave the right PIN
+gets only a refusal. Anyone who reaches the port can burn a shown PIN, so a flood can stop pairing while it lasts: bound
+connections in the host.
+
+### The PIN exchange on the wire
+
+The Rust side runs this through `coqui-peer`, whose source is the definition. The JavaScript module implements the same
+messages for a typed PIN, and it is byte-compared with Rust in `tests/vectors/pairing.json`. Every message starts with the
+version byte `01` and its kind; a key is its method, its label and its bytes, the first two after one length byte and the
+last after four.
+
+| Kind | From | Fields |
+| --- | --- | --- |
+| `01` hello | joiner | mode (`01` typed PIN), the joiner's key |
+| `02` ready | responder | the responder's key, slot (`ff`: none) |
+| `03` PAKE | joiner | SPAKE2 message, after one length byte |
+| `04` reply | responder | SPAKE2 message, after one length byte; 32-byte MAC |
+| `05` confirm | joiner | 32-byte MAC |
+| `07` done | responder | the responder's key |
+| `08` refused | either | why: `01` wrong code, `02` expired, `03` exhausted, `04` throttled, `05` denied, `06` disabled |
+
+A key in a message must be the one the session proved, to the byte, or the exchange is over.
+
+- **SPAKE2.** The joiner is side A and the responder side B, and their ids (`sha256:<hex>`) are `idA` and `idB`. The
+  password is the PIN's UTF-8 bytes. From the `spake2` crate 0.4: `w` is HKDF-SHA256 of the password with an empty salt and
+  info `SPAKE2 pw`, 48 bytes read big-endian, modulo the group order. A message is a side byte (`41`, `42`) and
+  `xB + wM` (or `wN`) compressed. The key is SHA-256 over SHA-256 of the password, of `idA` and of `idB`, then both
+  elements and the compressed result.
+- **Confirmation.** Two keys come from that key by HKDF-SHA256 with no salt, info `coqui-pair joiner confirmation` and
+  `coqui-pair responder confirmation`. Each MAC is HMAC-SHA256 under its side's key of the transcript: `coqui-pair pin`, both
+  keys, the slot, both SPAKE2 messages each after one length byte, the byte `01` and the binding after four length bytes.
+- **Order.** The responder takes an attempt at the PIN when the PAKE message arrives, sends its reply and MAC, and on the
+  right confirmation keeps the joiner's key and only then sends done. The joiner verifies the responder's MAC before it
+  sends its own.
+
+### What the JavaScript side leaves open
+
+WebCrypto has no group operation, so the module computes SPAKE2 over Edwards25519 with `BigInt`, written to match the crate.
+
+- **It is not constant-time.** Each scalar runs one fixed sequence of complete additions, with no branch on its bits except
+  an array index, but `BigInt` itself promises nothing about time, and the password's scalar goes through it. Someone who
+  can measure this page's work closely enough to learn that scalar could then test PINs offline. No such attack was
+  attempted or measured, and how close it needs to be is not known. A PIN lives for one attempt by default.
+- **Its checks.** The `spake2` crate's own known answer (`tests/vectors/spake2.json`, copied and never regenerated) in both
+  roles; points times scalars against Node's Ed25519 public keys; Rust's records of a right and a wrong PIN to the byte; and
+  real runs against Rust in Node and in Chrome and Edge. Nothing here is a proof that it is correct on every input.
+- **Stricter than the crate on what it reads.** It refuses a second encoding of a point, which `curve25519-dalek` takes; a
+  message that passes one and not the other can only come from a party that is not following the protocol, and ends in a
+  refusal or a failed confirmation either way.
+- **It cannot erase.** A `BigInt` scalar and the PIN as a string stay in memory until the engine collects them. The key
+  bytes it holds in arrays are wiped.
+
+The module's responder offers only a PIN typed at the joiner, and refuses every other mode as `disabled`. Its desk counts
+attempts and time; pending exchanges and per-source limits, which `PairingDesk` has in Rust, are the host's there.
+
 ## Bounds and refusal
 
 There is nothing to negotiate, so nothing to downgrade: no version field, no cipher list, no message type. A
@@ -298,7 +417,7 @@ actually do:
 - **Rust.** Ephemeral and long-term keys, every `ck`, the HKDF output, the export secret and PEM text are held on
   the heap in place and zeroed when dropped, and `tests/erasure.rs` scans every freed block for them. Copies a move
   leaves on the stack, and the working state of `x25519-dalek`, `hkdf`, `sha2` and `aes-gcm` on the stack, are not
-  erased.
+  erased. The `spake2` crate holds the PIN's bytes and both of its scalars in memory it does not zero.
 - **JavaScript.** Key bytes are wiped where the module holds them (`ck`, HKDF's outputs, a DH output), and every key
   after that is a non-extractable `CryptoKey` it cannot wipe. Noise's HKDF needs each chaining key as bytes, so those
   exist in JavaScript memory for the handshake. It drops its reference to the ephemeral key when the handshake ends,
@@ -307,8 +426,8 @@ actually do:
 
 ## Not in this protocol
 
-- **Pairing inside a session.** This version has none: a peer is admitted by a pin or a store, and the proved
-  stranger's key waits in the store for its operator.
+- **Invitation, device flow or a shown PIN in JavaScript.** Rust has all three through `coqui-peer`; the module has a typed
+  PIN, and only that.
 - **Hiding sizes.** Section 13 recommends padding; there is none, and a relay sees each record's length.
 - **Hiding the responder.** Section 7.8, property 1. A responder that must not be identified by probes needs
   something in front of it.
