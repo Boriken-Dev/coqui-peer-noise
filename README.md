@@ -7,13 +7,15 @@
 encrypted session, in a browser or natively, through anything that carries their messages.** This is a
 method of [`coqui-peer`](https://github.com/Boriken-Dev/coqui-peer), which holds the peer id, the trust
 store and the sans-IO handshake trait. It depends on no TLS session beneath it, so it works behind a
-TLS-terminating reverse proxy, and such a proxy can connect the two peers and nothing more, unless it also serves the page:
-`PROTOCOL.md`, "Where this method cannot protect". See the
+TLS-terminating reverse proxy, and such a proxy cannot read or change a record or end a stream unseen, though it can forward the run, delay,
+block or cut the connection, and see sizes and timing, and one that also serves the page can do more: `PROTOCOL.md`,
+"Through a relay" and "Where this method cannot protect". See the
 [documentation](https://boriken-dev.github.io/coqui-peer-noise/) and the
 [wire protocol](https://github.com/Boriken-Dev/coqui-peer-noise/blob/main/PROTOCOL.md).
 
-> **Status: unreleased, and not independently reviewed.** The wire and the API may change at any
-> commit. There are no releases for now: depend on a git revision.
+> **Status: unreleased, with one independent review, by another AI agent.** That review was neither
+> third-party nor formal, and there is no formal model of Noise XX with a SPAKE2 exchange inside it. The wire and
+> the API may change at any commit. There are no releases for now: depend on a git revision.
 
 ## Features
 
@@ -21,11 +23,15 @@ TLS-terminating reverse proxy, and such a proxy can connect the two peers and no
   endpoint and never on the wire. Neither side's static key goes in the clear, the initiator's goes only to the
   responder it pinned, and no signature leaves evidence.
 - **The static key is the identity**: its id is the SHA-256 of its RFC 8410 public key, which
-  `openssl pkey -pubout -outform DER | sha256sum` reproduces. One key has one encoding and so one id, and a key of
-  small order is refused.
+  `openssl pkey -pubout -outform DER | sha256sum` reproduces. A key has one encoding, and so one id; but one private key can
+  prove eight public keys and so eight ids (`PROTOCOL.md`), none of which a trust decision depends on. A key of small
+  order is refused.
 - **A session**: Noise's handshake hash as an id both ends agree on, records of any length, a sealed close that
   makes a cut stream visible, a limit on each key with an automatic change of key, and exports. A party carrying
   the connection cannot read or change what goes through it, or end it unseen.
+- **No downgrade**: a client stores the method with the pin and never falls back to another method when a connection
+  fails; only a failed `supported()` (JavaScript), decided before any connection, selects another
+  (`PROTOCOL.md`, "The downgrade rule").
 - **Trust from `coqui-peer`**: fixed pins, or a live `TrustStore` read at each handshake, with waiting entries for
   proved strangers and rotation to a proved successor.
 - **Pairing on a session of its own**: two strangers prove keys and run a PIN exchange sealed in the session, bound to it and

@@ -8,7 +8,8 @@ the package and is self-contained. Development documentation lives with the sour
 One Cargo feature, off by default: `pin`, which is `coqui-peer/pin` (SPAKE2, HKDF, HMAC), for `pair::Pairing::pin`.
 MSRV Rust 1.89. A build depends on `coqui-peer` (by git revision, `1f00bfe`),
 `x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`, `data-encoding`, `getrandom` and `zeroize`. This crate is
-unreleased, with no independent security review: depend on a git revision, and name the same `coqui-peer`
+unreleased, with one independent review by another AI agent (neither third-party nor formal) and no formal model
+of XX with SPAKE2 inside it: depend on a git revision, and name the same `coqui-peer`
 revision if you use it directly; the wire and API may change at any commit. This is the method named `noise`
 of `coqui-peer` (`PeerId`, `TrustStore`, the sans-IO `Handshake`); its API header ships in that crate.
 `PROTOCOL.md` ships here and is the wire.
@@ -130,6 +131,7 @@ through a reverse proxy, where the two ends read different values. It is never s
 
 ```rust
 pub const DEFAULT_KEY_LIMIT: u64 = 1 << 38;   // each Noise message counts its length and 32
+pub const fn record_length(message_length: usize) -> usize;   // the record a message becomes; see below
 pub struct Session;                           // Debug shows nothing
 impl Session {
     pub fn id(&self) -> &[u8; 32];            // Noise's handshake hash; both ends agree; not secret
@@ -148,7 +150,10 @@ impl Opener { pub fn open(&mut self, record: &[u8]) -> Result<Option<Vec<u8>>, E
 
 Each message is one record, sent whole and in order on a reliable transport, in binary frames. A message may be of
 any length: a record is as many Noise messages as it takes (each at most 65535 bytes), and a message of up to 65518
-bytes is one Noise message and 19 bytes more than itself. What bounds it is the transport's frame limit: `FramedStream`'s
+bytes is one Noise message and 19 bytes more than itself. **`record_length(n)` is the length of the record a message
+of `n` bytes becomes: `n + 19 * max(1, ceil(n / 65518))`, which is 19 bytes more up to 65,518 bytes, 38 at 65,519, 323 at
+1 MiB and 4,883 at 16 MiB; a change of key, made only at the key limit, adds 19 to the record that holds it. Size a
+`FramedStream` limit and any cap on a message from it, not from the message length.** What bounds it is the transport's frame limit: `FramedStream`'s
 is `max_message`, in both directions, up to its length field's 2^32 - 1. A record a transport refuses has already used
 its nonces, so the session cannot go on after that: end it.
 
@@ -160,12 +165,13 @@ Any failure to open ends the session in both directions, split or not: `Error::R
 `open`, `seal` and `close`, and the caller closes the connection.
 
 **At `with_key_limit`, with rekey on**, the sender changes its key in the record that crosses the limit, and the
-stream goes on; nothing is asked of the caller, and the peer follows. A receiver refuses a sender above its own
-limit, so raise a limit at both ends or not at all. A single Noise
+stream goes on; nothing is asked of the caller, and the peer follows. A receiver refuses a sender above the larger of
+its own limit and `DEFAULT_KEY_LIMIT`: a lower limit is only this side's own sending, and a limit above the default is raised
+at both ends or not at all. A single Noise
 message costing more than the limit is `Error::LimitReached`, with nothing sent and the session intact: a limit
 of zero passes only a close. **With rekey off**, a record that would pass the limit is `Error::LimitReached`, with
 nothing sent, the session intact and a close still passing; a new handshake carries on. An `open` past the limit
-(a peer above this side's limit) is `Error::LimitReached` and ends the session. Running out of nonces, at 2^64 - 1,
+(a peer above the larger of this side's limit and the default) is `Error::LimitReached` and ends the session. Running out of nonces, at 2^64 - 1,
 is `Error::LimitReached` from `seal` and ends the session.
 
 `export` gives unrelated bytes for another label or another length. Keep every application message
@@ -263,6 +269,7 @@ quotes input, a key or a path. A handshake is over after an error: nothing queue
 - Each first message costs a responder two DH operations and an ephemeral key for free: bound connections and time
   in the host.
 - A record's length is visible: there is no padding.
+- A record whose last part is empty after a part is `Error::Record`: one message has one record.
 - Removing a peer does not stop its running sessions: the host closes them, polling
   `TrustStore::is_accepted` if it must.
 - `Error` and `Trust` are `#[non_exhaustive]`: a `match` needs a `_` arm.

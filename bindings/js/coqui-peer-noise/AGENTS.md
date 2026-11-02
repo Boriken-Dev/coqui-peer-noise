@@ -5,7 +5,7 @@ without reading the source. One file, so it can be vendored by copying it. It ne
 a browser needs a secure context, and by MDN's data Chrome 133, Firefox 130 or Safari 17 (this module has been run in
 Chrome and Edge on Windows, and Node 22 and 24). The wire is `PROTOCOL.md` of
 <https://github.com/Boriken-Dev/coqui-peer-noise>, which the Rust crate of that name also
-implements. Not independently reviewed; it may change at any commit.
+implements. One independent review, by another AI agent (neither third-party nor formal); it may change at any commit.
 
 ```js
 export const PROFILE;              // 'dev.boriken.coqui.peer-noise/v1'
@@ -13,6 +13,9 @@ export const METHOD;               // 'noise'
 export const PROTOCOL_NAME;        // 'Noise_XX_25519_AESGCM_SHA256'
 export const DEFAULT_KEY_LIMIT;    // 2 ** 38
 export const profile;              // {id, protocol, method}
+
+export async function supported();      // -> boolean: X25519, AES-GCM, HKDF, HMAC and SHA-256 work here; never throws, no connection
+export function recordLength(n);        // -> the record length of an n-byte message: n + 19 * max(1, ceil(n / 65518)); RangeError otherwise
 
 export async function generateIdentity();              // -> identity
 export async function importIdentity(pkcs8);           // RFC 8410 PKCS#8 DER X25519 bytes -> identity
@@ -52,8 +55,8 @@ export const __testing;            // not API: the layer beneath, for the publis
 96 or 64, and any other is refused. Options:
 
 - `keyLimit`: what one key may carry in one direction, each Noise message counting its length and 32. Default
-  `DEFAULT_KEY_LIMIT`, no floor. A receiver refuses a sender above its own limit, so raise it at both ends or not at
-  all.
+  `DEFAULT_KEY_LIMIT`, no floor. A receiver refuses a sender above the larger of its own limit and the default, so a lower
+  limit is only this side's own sending, and a higher one is raised at both ends or not at all.
 - `rekey`: whether this side changes its sending key by itself at the limit. Default `true`. With `true`, a record
   crossing the limit carries the change and the stream goes on. With `false`, a record that would pass the limit is
   refused with nothing sent, a close still passes, and a new handshake carries on. Either way a single Noise message
@@ -156,7 +159,13 @@ over after one, and a later call says `Unexpected ...`. What is refused is in `P
 
 ## Gotchas
 
-- A non-extractable key cannot be copied out, but any script in the origin can use it.
+- A non-extractable key cannot be copied out by a script, but any script in the origin can use it, and anyone who can read the
+  browser profile can take it: Chrome was seen keeping its plain PKCS#8 in the origin's IndexedDB directory.
+- **Store the method with the pin and never fall back to another on a connection failure.** Only a false `supported()`,
+  asked before any connection, selects another method (`PROTOCOL.md`, "The downgrade rule").
+- `recordLength(n)` is what a message of `n` bytes becomes on the wire (19 bytes more up to 65,518, then 19 for each further
+  65,518; 323 at 1 MiB, 4,883 at 16 MiB). Size a frame limit from it. A key change adds 19.
+- A record whose last part is empty after a part is refused: one message has one record.
 - A proxy that also serves the page can replace this module or use its non-extractable key, so a hosted page gets no protection
   from that proxy. An extension, a packaged app, or a page whose code and pinned id come from elsewhere does.
 - One private key can prove 8 ids, as `PROTOCOL.md` says. Each is admitted only on its own, so no trust decision turns on it, but

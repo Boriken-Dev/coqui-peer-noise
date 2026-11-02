@@ -1,6 +1,7 @@
 # The Noise method: wire profile v1
 
-**Status:** experimental. It has had no independent security review and is not an IETF or ACP
+**Status:** experimental. It has had one independent review, by another AI agent: neither a third-party
+review nor a formal one, and there is no formal model of XX with a SPAKE2 exchange inside it. It is not an IETF or ACP
 standard. Implementations: Rust (`src/`) and JavaScript (`bindings/js/coqui-peer-noise/`), checked
 against each other, against `snow` (a third implementation of this Noise protocol, in the Rust tests),
 against the published vectors in `tests/vectors/published.json` and against `tests/vectors/session.json`
@@ -32,7 +33,7 @@ specification were read for this document.
 ### What is ours, and what nobody has analysed
 
 **Only the first row rests on published analysis.** Everything below it is this profile's or `coqui-peer`'s, built by
-reading the sources named here and argued in this document, with no proof and no review. The papers above do not cover it.
+reading the sources named here and argued in this document, with no proof and no third-party or formal review. The papers above do not cover it.
 
 | Piece | Whose | State |
 | --- | --- | --- |
@@ -67,6 +68,15 @@ X25519 in WebCrypto is what a browser must have. By MDN's browser-compat-data fo
 `coqui-peer-webcrypto` is the method for those. This module's browser test has run in Chrome 156 and
 Edge 156 on Windows ARM64, with a non-extractable key held in IndexedDB; Firefox and Safari have not been
 run.
+
+### The downgrade rule
+
+**A client stores the method with the pin, and never falls back to another method because a connection failed.** A
+refused connection, a timeout, a failed handshake and a peer that does not speak the method are all things a party
+carrying the connection can cause, so a fallback on any of them lets that party choose the method. Only a failed
+`supported()` selects another method, and it does so before any connection: it runs each primitive this method needs in
+the local runtime, asks nothing of any peer, and nothing on the network can change its answer. A client falls
+back that way only to a method it already holds a pin for with that peer.
 
 ### Why not `snow`
 
@@ -227,8 +237,15 @@ message = AESGCM(k, n, ad = "", type || contents)     ; section 12.4's nonce; n 
 
 **A record has one shape for one message.** Each part holds 65518 bytes of the message, the most section 3's
 65535-byte limit leaves after the tag and the type, and the last part holds the rest. So a message of any
-length is one record, and what bounds it is the transport, not this protocol. A record's parts are bound to
+length is one record, and what bounds it is the transport, not this protocol. The last part is empty only when the whole
+message is, so one message has one record, and a record whose last part is empty after a part is refused. A record's parts are bound to
 each other by the nonce, so a relay can neither drop one nor cut the record between two without being refused.
+
+**The length of a record.** Each Noise message adds its 2-byte length field, its 16-byte tag and its 1-byte type: 19
+bytes. So a message of `n` bytes is a record of `n + 19 * max(1, ceil(n / 65518))` bytes, and a key change adds 19 to the
+record that holds it. That is 19 bytes of overhead up to 65,518 bytes, 38 at 65,519, 323 at 1 MiB and 4,883 at 16
+MiB. `record_length` (Rust) and `recordLength` (JavaScript) give it, and a transport's frame limit is set from it, not
+from the message length.
 
 A record that fails to open, has any other type, breaks the shapes above, has a byte after its last message, or
 carries contents in a close or a key change, ends the session in **both** directions: nothing later is
@@ -246,7 +263,9 @@ after the peer's close is refused.
 
 Each setting has a default, no floor and no ceiling beyond the specification's own rules, and is the host's
 to choose. `rekey` and a lower limit are each side's own: a change of key is announced in the record that makes
-it. A receiver refuses a sender above its own limit, so a limit is raised at both ends or not at all.
+it. **A receiver refuses a sender above the larger of its own limit and the default**, so a lower limit only makes
+its own sender change keys sooner, and a peer at the default is still believed. A limit above the default is raised at
+both ends or not at all.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -272,8 +291,10 @@ protection against a later compromise of the key.
   key could carry it. A limit of zero passes only a close.
 - With rekey off, a record that would pass the limit is refused with a limit error before anything of it is
   sealed. The session stays intact, a close still passes, and carrying on takes a new handshake.
-- An opener that sees a peer pass the limit on one key ends the session: only a peer running above this side's
-  limit does this, and part of a record may already have been opened.
+- An opener that sees a peer pass the limit on one key ends the session: only a peer running above the larger of this
+  side's limit and the default does this, and part of a record may already have been opened. The default is the
+  bound the key's security rests on, so a receiver holds a peer to no stricter one: a stricter one would end a session
+  with a well-behaved peer and protect nothing the peer's own limit does not.
 - The nonces run out at 2^64 - 1, section 5.1's reserved value: a direction that cannot fit a record below it
   ends the session, as section 5 requires. This is the specification's and not a setting.
 
@@ -297,6 +318,11 @@ three messages, both ends succeed, and it then reads and writes as it likes.
 **Where this method cannot protect.** A proxy that also serves the page can replace the module, or call the page's
 non-extractable key from a script of its own, so a hosted page gets no protection from that proxy. An extension, a packaged app,
 or a page whose code and pinned id come from elsewhere does.
+
+**Whoever can read the browser profile can take the key.** A non-extractable `CryptoKey` cannot be copied out by a
+script, but the browser stores it: in Chrome, the key's plain PKCS#8 was found in `000003.log` in the origin's IndexedDB
+directory. Malware running as the same user, or a backup of the profile, takes the key and with it the peer's identity,
+and the method has no defence against it. The same holds for any key a page keeps.
 
 ### The outer binding
 
@@ -474,5 +500,6 @@ actually do:
   peer's open connections itself.
 - **Key-compromise resistance after the fact.** Whoever later learns a static private key can impersonate that peer
   from then on, and cannot read recorded sessions, whose keys came through `ee` as well.
-- **Keeping a page's key from its own origin.** A non-extractable key cannot be copied out, but any script in the
-  origin can use it, and IndexedDB's contents can be cleared by the browser or the user.
+- **Keeping a page's key from its own origin, or from its profile.** A non-extractable key cannot be copied out by a
+  script, but any script in the origin can use it, anyone who can read the browser profile can take it, and
+  IndexedDB's contents can be cleared by the browser or the user.
