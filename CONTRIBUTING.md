@@ -34,5 +34,6 @@ cd bindings/js/coqui-peer-noise && npm test
 All checks must pass. [`AGENTS.md`](AGENTS.md) is the crate's API header and ships in the package, as
 `bindings/js/coqui-peer-noise/AGENTS.md` is the JavaScript module's; keep each current with its API
 in the same commit. A change to the wire changes [`PROTOCOL.md`](PROTOCOL.md), both implementations and
-`tests/vectors/session.json` together (`cargo test --test vectors -- --ignored regenerate`). Files are LF, on
+`tests/vectors/session.json` together (`cargo test --test vectors -- --ignored regenerate`), and a change to pairing
+`tests/vectors/pairing.json` (`cargo test --features pin --test pair_vectors -- --ignored regenerate`). Files are LF, on
 every platform. The Rust version is 1.89, checked in CI beside stable.

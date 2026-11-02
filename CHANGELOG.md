@@ -23,3 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The JavaScript module in `bindings/js/coqui-peer-noise`, with the same wire in both roles, over `crypto.subtle`.
 - `PROTOCOL.md`, the published vectors in `tests/vectors/published.json`, and the shared vectors in
   `tests/vectors/session.json`.
+- `PairingMethod`, `PairingSession` and `PairDial`, with the `pin` feature: `coqui_peer::pair` sealed in a session of its own.
+  A stranger's session can carry nothing else.
+- `createPairingInitiator`, `createPairingResponder` and `createPairingDesk` in the JavaScript module: a typed PIN in both
+  roles, the same bytes as Rust, over `BigInt` arithmetic that is not constant-time.
+- `tests/vectors/pairing.json` and `tests/vectors/spake2.json`.
+- `tools/proxy-run`: a real nginx between a real browser and the Rust side, by hand and not in CI.
