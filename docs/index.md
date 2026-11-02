@@ -21,8 +21,10 @@ succeed, and then speak for either. This method therefore ends in keys only the 
 application keeps every later message inside that session. Nothing depends on the TLS beneath it.
 
 A party carrying the connection can forward it, see ephemeral keys and record sizes, delay it and cut it,
-and a cut is reported. It cannot read or change a record, replace a key, or stand in for a pinned peer. It can, if it
-also serves a page's JavaScript, replace that JavaScript, so a browser application ships the module with itself.
+and a cut is reported. It cannot read or change a record, replace a key, or stand in for a pinned peer.
+
+A proxy that also serves the page can replace the module or use its non-extractable key, so a hosted page gets no protection
+from that proxy. An extension, a packaged app, or a page whose code and pinned id come from elsewhere does.
 
 ## Choosing a method
 

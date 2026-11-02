@@ -7,7 +7,8 @@
 encrypted session, in a browser or natively, through anything that carries their messages.** This is a
 method of [`coqui-peer`](https://github.com/Boriken-Dev/coqui-peer), which holds the peer id, the trust
 store and the sans-IO handshake trait. It depends on no TLS session beneath it, so it works behind a
-TLS-terminating reverse proxy, and such a proxy can connect the two peers and nothing more. See the
+TLS-terminating reverse proxy, and such a proxy can connect the two peers and nothing more, unless it also serves the page:
+`PROTOCOL.md`, "Where this method cannot protect". See the
 [documentation](https://boriken-dev.github.io/coqui-peer-noise/) and the
 [wire protocol](https://github.com/Boriken-Dev/coqui-peer-noise/blob/main/PROTOCOL.md).
 

@@ -220,8 +220,8 @@ proves.
 nothing read and `None` leaving only the transport's own. So ask a person for the PIN before connecting, or raise this. From
 that message each read waits until the desk's deadline. Either running out tells the joiner and returns
 `Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. Over a `FramedStream` the bound holds however slowly the bytes
-come; another transport must make a whole `recv` obey its timeout. `respond` sets the transport's read timeout, and
-leaves it at what it last needed.
+come; another transport must make a whole `recv` obey its timeout. `drive_messages_until` clears the timeout it used, so
+set your own after the handshake. `respond` sets the transport's read timeout, and leaves it at what it last needed.
 
 A record longer than `MAX_PAIRING_RECORD` is `Error::Pairing(PairingError::Protocol)` without being opened, whatever the
 transport lets through.
