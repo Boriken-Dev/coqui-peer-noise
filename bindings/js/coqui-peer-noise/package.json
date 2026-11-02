@@ -1,0 +1,21 @@
+{
+  "name": "@boriken/coqui-peer-noise",
+  "version": "0.0.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "description": "The Noise method of coqui-peer: Noise_XX_25519_AESGCM_SHA256 over WebCrypto, ending in an encrypted session",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Boriken-Dev/coqui-peer-noise.git",
+    "directory": "bindings/js/coqui-peer-noise"
+  },
+  "exports": "./src/index.mjs",
+  "files": ["src/", "AGENTS.md", "README.md"],
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

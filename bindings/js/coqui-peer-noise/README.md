@@ -1,0 +1,29 @@
+# @boriken/coqui-peer-noise
+
+The Noise method of [coqui-peer](https://github.com/Boriken-Dev/coqui-peer), in JavaScript: two peers run
+`Noise_XX_25519_AESGCM_SHA256`, prove their X25519 keys to each other and end up with an encrypted session, with no
+dependency and a private key that cannot leave WebCrypto. It interoperates with the
+[Rust crate](https://github.com/Boriken-Dev/coqui-peer-noise) in both roles, and works behind a TLS-terminating reverse
+proxy, because it uses nothing of the connection beneath it.
+
+Not independently reviewed. `AGENTS.md` here is the API, and
+[PROTOCOL.md](https://github.com/Boriken-Dev/coqui-peer-noise/blob/main/PROTOCOL.md) the wire and what a relay can and
+cannot do.
+
+```js
+import {createInitiator, loadOrCreateIdentity} from '@boriken/coqui-peer-noise';
+
+const identity = await loadOrCreateIdentity('my.application.peer');
+const initiator = await createInitiator(identity, expectedPeerId);
+socket.send(await initiator.hello());
+const {reply, session} = await initiator.answer(await nextMessage());
+socket.send(reply);
+
+socket.send(await session.seal('every later message goes through the session'));
+socket.send(await session.close());  // the last record; a stream cut before it is reported
+```
+
+`npm test` runs the tests, including the Rust example in both roles and a real browser, which skip with
+a message where cargo or a browser is absent.
+
+MPL-2.0.
