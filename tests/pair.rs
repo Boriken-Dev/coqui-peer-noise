@@ -672,6 +672,43 @@ fn a_record_longer_than_any_of_the_exchange_is_refused_before_it_is_opened() {
 }
 
 #[test]
+fn a_joiner_retrying_one_pin_gives_a_relay_a_new_guess_each_time() {
+    // Two digits, so that the test ends. What it shows does not depend on the PIN's length.
+    let alphabet = CodeAlphabet {
+        chars: "0123456789".to_owned(),
+        len: 2,
+    };
+    let options = PairingOptions {
+        pin_alphabet: alphabet.clone(),
+        ..PairingOptions::default()
+    };
+    let (joiner, relay) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let world = world();
+    let paired = (0..2000).find_map(|_| {
+        let desk = PairingDesk::new(random())
+            .with_options(options.clone())
+            .unwrap();
+        desk.show_pin().unwrap();
+        let (near, far) = strangers(&joiner, &relay);
+        let (mut a, mut b) = pipes();
+        let serving = {
+            let store = world.store.clone();
+            thread::spawn(move || far.respond(&store, &desk, None, &mut b).map(drop))
+        };
+        let same_pin = Pin::parse(&alphabet, "42").unwrap();
+        let joined = near
+            .join(Pairing::pin(same_pin, PinRole::Typed), &mut a)
+            .and_then(coqui_peer_noise::PairDial::finish);
+        drop(a);
+        let _ = serving.join().unwrap();
+        joined.ok()
+    });
+    // Nothing was counted: each run reached a desk of the relay's, never the real one.
+    let paired = paired.expect("one of these runs guessed the joiner's PIN");
+    assert_eq!(paired.peer, relay.key_material());
+}
+
+#[test]
 fn the_methods_refuse_each_others_gaps() {
     let identity = Identity::generate().unwrap();
     let other = Identity::generate().unwrap();

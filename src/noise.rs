@@ -186,7 +186,8 @@ impl SymmetricState {
 }
 
 /// Whether `key` is the one encoding of a value. RFC 7748 section 5 has X25519 mask the top bit and
-/// reduce modulo p, so without this a peer could present one key under several encodings, and ids.
+/// reduce modulo p, so without this one value would have several encodings, and so ids. It does not
+/// make one private key one id: `PROTOCOL.md` says what a point of order 8 does.
 pub(crate) fn is_canonical(key: &[u8; DHLEN]) -> bool {
     // At or above p = 2^255 - 19 with the top bit clear, the encoding is ed, ee or ef up to ff, then
     // 30 bytes of ff, then 7f. These are public values, so the branches reveal nothing secret.

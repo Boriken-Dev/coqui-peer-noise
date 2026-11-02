@@ -42,6 +42,8 @@ getrandom = { version = "0.4", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+# The points of order 8, for what one private key can prove. The line x25519-dalek builds on.
+curve25519-dalek = { version = "4.1", default-features = false }
 # Temporary store directories.
 tempfile = "3"
 # Reads the test vectors.

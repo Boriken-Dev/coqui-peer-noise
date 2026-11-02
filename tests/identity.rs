@@ -2,9 +2,13 @@
 
 mod support;
 
-use coqui_peer::{KeyMaterial, PeerId};
-use coqui_peer_noise::{Error, Identity, METHOD, PROTOCOL_NAME};
-use support::{dh_of, identity_of, small_order};
+use std::collections::BTreeSet;
+
+use coqui_peer::{Handshake, KeyMaterial, Method, PeerId};
+use coqui_peer_noise::{Error, Identity, METHOD, Noise, PROFILE, PROTOCOL_NAME, Trust, TrustStore};
+use curve25519_dalek::constants::EIGHT_TORSION;
+use curve25519_dalek::montgomery::MontgomeryPoint;
+use support::{Attacker, Forger, dh_of, identity_of, public_of, small_order};
 
 // `openssl genpkey -algorithm x25519`, a throwaway test key.
 const OPENSSL: &str = "-----BEGIN PRIVATE KEY-----
@@ -148,5 +152,98 @@ fn every_listed_small_order_point_gives_x25519_all_zeros() {
     for point in small_order() {
         assert_eq!(dh_of([0x77; 32], point), [0; 32]);
         assert_eq!(dh_of([0x31; 32], point), [0; 32]);
+    }
+}
+
+/// A run as the initiator, by hand, holding `private` and presenting `public`, and whether a record
+/// from it opens at the far end.
+fn run_as(
+    private: [u8; 32],
+    public: [u8; 32],
+    responder: &Identity,
+    listening: &Noise,
+) -> Result<PeerId, Error> {
+    const EPHEMERAL: [u8; 32] = [0x55; 32];
+    let mut prologue = Vec::new();
+    for field in [PROFILE.as_bytes(), b"ordinary", b""] {
+        prologue.extend_from_slice(&u32::try_from(field.len()).unwrap().to_be_bytes());
+        prologue.extend_from_slice(field);
+    }
+    let mut far = listening.respond(None)?;
+    let own = public_of(EPHEMERAL);
+    let mut state = Attacker::new(&prologue);
+    state.mix_hash(&own);
+    state.mix_hash(&[]);
+    far.receive(&own)?;
+    let second = far.transmit()?.expect("the second message");
+    let theirs: [u8; 32] = second[..32].try_into().unwrap();
+    state.mix_hash(&theirs);
+    state.mix_key(&dh_of(EPHEMERAL, theirs));
+    state.encrypt_and_hash(responder.public_key());
+    state.mix_key(&dh_of(EPHEMERAL, *responder.public_key()));
+    state.encrypt_and_hash(&[]);
+    let mut third = state.encrypt_and_hash(&public);
+    state.mix_key(&dh_of(private, theirs));
+    third.extend_from_slice(&state.encrypt_and_hash(&[]));
+    far.receive(&third)?;
+    let established = far.finish()?;
+    let (to_far, ..) = state.split();
+    let mut session = established.session;
+    let record = Forger::new(to_far).message(1, b"from the same private key");
+    assert_eq!(
+        session.open(&record)?.as_deref(),
+        Some(&b"from the same private key"[..])
+    );
+    Ok(established.peer)
+}
+
+fn id_of(key: &[u8; 32]) -> PeerId {
+    PeerId::of(&[&OPENSSL_PUBLIC[..12], &key[..]].concat())
+}
+
+#[test]
+fn one_private_key_proves_eight_ids_and_each_is_admitted_only_on_its_own() {
+    const PRIVATE: [u8; 32] = [0x77; 32];
+    let honest = public_of(PRIVATE);
+    let keys: Vec<[u8; 32]> = EIGHT_TORSION
+        .iter()
+        .map(|point| {
+            (MontgomeryPoint(honest).to_edwards(0).unwrap() + point)
+                .to_montgomery()
+                .to_bytes()
+        })
+        .collect();
+    assert!(keys.contains(&honest));
+    let responder = Identity::generate().unwrap();
+    let ids: BTreeSet<_> = keys
+        .iter()
+        .map(|&key| {
+            // A pin of this key's id alone admits it.
+            let listening =
+                Noise::new(responder.clone()).with_initiators(Trust::pinned([id_of(&key)]));
+            run_as(PRIVATE, key, &responder, &listening).unwrap()
+        })
+        .collect();
+    assert_eq!(ids.len(), 8, "one private key, eight ids");
+
+    // No trust carries from one to another: a pin of the honest key admits none of the rest, and a
+    // store accepts none and keeps each apart.
+    let pinned_honest =
+        Noise::new(responder.clone()).with_initiators(Trust::pinned([id_of(&honest)]));
+    let directory = tempfile::tempdir().unwrap();
+    let store = TrustStore::open(directory.path()).unwrap();
+    let stored = Noise::new(responder.clone()).with_initiators(Trust::Store(store.clone()));
+    for &key in keys.iter().filter(|&&key| key != honest) {
+        assert!(matches!(
+            run_as(PRIVATE, key, &responder, &pinned_honest),
+            Err(Error::Untrusted)
+        ));
+        assert!(matches!(
+            run_as(PRIVATE, key, &responder, &stored),
+            Err(Error::Untrusted)
+        ));
+    }
+    for id in &ids {
+        assert!(!store.is_accepted(id));
     }
 }
