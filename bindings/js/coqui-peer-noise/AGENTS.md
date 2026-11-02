@@ -20,20 +20,21 @@ export async function loadOrCreateIdentity(name);      // IndexedDB database `na
 // identity: frozen {method, peerId: 'sha256:<hex>', publicKey: base64url SPKI, privateKey: CryptoKey}
 
 export async function createInitiator(identity, expectedPeerId, options);
-// -> {async hello() -> Uint8Array, async answer(raw) -> {reply: Uint8Array, peerId, session}}
+// -> {async hello() -> Uint8Array, async answer(raw) -> {reply: Uint8Array, peerId, session}, weakened()}
 export async function createResponder(identity, {allowClient, ...options});
-// -> {async challenge(raw) -> Uint8Array, async accept(raw) -> {peerId, session}}
+// -> {async challenge(raw) -> Uint8Array, async accept(raw) -> {peerId, session}, weakened()}
 // allowClient: async (peerId) -> exactly true to admit; runs after the peer proved its key
 
 // A stranger's handshake, which only pairs; see "Pairing" below.
 export async function createPairingInitiator(identity, {responder, random, ...options});
-// -> {async hello(), async answer(raw) -> {reply, peerId, pairing}}
+// -> {async hello(), async answer(raw) -> {reply, peerId, pairing}, weakened()}
 export async function createPairingResponder(identity, {firstMessageTimeout, ...options});
-// -> {async challenge(raw), async accept(raw) -> {peerId, pairing}}
+// -> {async challenge(raw), async accept(raw) -> {peerId, pairing}, weakened()}
 export function createPairingDesk({pinAlphabet, pinLength, pinTtl, pinAttempts, now, random});
-// -> frozen {showPin() -> {pin, expires}, shownPin() -> {pin, expires} | null, clearPin()}
+// -> frozen {showPin() -> {pin, expires}, shownPin() -> {pin, expires} | null, clearPin(), weakened()}
 export const PAIR_EXPORT_LABEL;    // 'EXPORTER-coqui-pair'
 export const DEFAULT_FIRST_MESSAGE_TIMEOUT;   // 60000 (ms)
+export const MAX_PAIRING_RECORD;   // 350: a longer record of an exchange is refused without being opened
 
 // session (frozen):
 //   id                          Uint8Array(32), Noise's handshake hash; both ends agree; not secret
@@ -64,6 +65,11 @@ export const __testing;            // not API: the layer beneath, for the publis
 
 The module reads `seal` and `open` input, and the options, when called, so the caller may reuse its buffer. Calls made together take
 their place in call order.
+
+A setting is never refused for being weak, so **`weakened()` says which are**: `[{setting, value, strict}]`, each one looser than
+its default, as text. On the objects `createInitiator` and its like give: `keyLimit` above the default, `rekey` off, a replaced
+`ephemeral` or `random`, a larger `firstMessageTimeout`, and `responders` or `initiators` at `any-with-key-proof` for what only
+pairs. On a desk: fewer `pinCombinations`, more `pinAttempts`, a longer `pinTtl`, a replaced `random` or `now`.
 
 An identity's private key must be non-extractable and X25519, and `peerId` must be the hash of `publicKey`, or
 `createInitiator` and `createResponder` throw. `openssl pkey -pubout -outform DER | sha256sum` gives a key's id. Each
