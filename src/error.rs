@@ -1,6 +1,8 @@
 use core::fmt;
 use std::io;
 
+use coqui_peer::pair::PairingError;
+
 /// Why a handshake, a session record or an identity failed.
 ///
 /// `Display` is one lowercase clause and never quotes the input, a key or a path.
@@ -41,7 +43,9 @@ pub enum Error {
     TooLong,
     /// The text or bytes are not an X25519 private key in PKCS#8.
     Key,
-    /// Reading or writing an identity file failed.
+    /// A pairing exchange was refused, by this side or the other, or did not follow its protocol.
+    Pairing(PairingError),
+    /// Reading or writing an identity file, or a transport a pairing exchange runs on, failed.
     Io(io::Error),
 }
 
@@ -60,7 +64,8 @@ impl fmt::Display for Error {
             Self::LimitReached => "a key reached its limit",
             Self::TooLong => "the export is over what HKDF can give",
             Self::Key => "not an X25519 PKCS#8 private key",
-            Self::Io(_) => "an identity file could not be read or written",
+            Self::Pairing(_) => "the pairing exchange failed",
+            Self::Io(_) => "an identity file or a transport failed",
         })
     }
 }
@@ -68,6 +73,7 @@ impl fmt::Display for Error {
 impl core::error::Error for Error {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
+            Self::Pairing(error) => Some(error),
             Self::Io(error) => Some(error),
             _ => None,
         }
@@ -77,5 +83,11 @@ impl core::error::Error for Error {
 impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+impl From<PairingError> for Error {
+    fn from(error: PairingError) -> Self {
+        Self::Pairing(error)
     }
 }

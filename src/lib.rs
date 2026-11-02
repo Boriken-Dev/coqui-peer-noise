@@ -16,16 +16,21 @@ mod framed;
 mod handshake;
 mod identity;
 mod noise;
+mod pairing;
 mod session;
 mod trust;
 
 pub use coqui_peer::{
-    Established, KeyMaterial, MessageTransport, Method, PeerId, Random, TrustStore, Weakening,
+    Established, KeyMaterial, MessageTransport, Method, PeerId, Random, TrustStore, Weakening, pair,
 };
 pub use error::Error;
 pub use framed::{FramedStream, MAX_HANDSHAKE_MESSAGE};
 pub use handshake::{METHOD, Noise, NoiseHandshake, PROFILE, random};
 pub use identity::Identity;
 pub use noise::PROTOCOL_NAME;
+pub use pairing::{
+    MAX_PAIRING_RECORD, PAIR_EXPORT_LABEL, PairDial, PairingHandshake, PairingMethod,
+    PairingSession,
+};
 pub use session::{DEFAULT_KEY_LIMIT, Opener, Sealer, Session};
 pub use trust::Trust;

@@ -5,7 +5,8 @@ signature, contract and gotchas, so the crate can be used without reading its so
 the package and is self-contained. Development documentation lives with the source at
 <https://github.com/Boriken-Dev/coqui-peer-noise>.
 
-No Cargo features. MSRV Rust 1.89. A build depends on `coqui-peer` (by git revision, `1f00bfe`),
+One Cargo feature, off by default: `pin`, which is `coqui-peer/pin` (SPAKE2, HKDF, HMAC), for `pair::Pairing::pin`.
+MSRV Rust 1.89. A build depends on `coqui-peer` (by git revision, `1f00bfe`),
 `x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`, `data-encoding`, `getrandom` and `zeroize`. This crate is
 unreleased, with no independent security review: depend on a git revision, and name the same `coqui-peer`
 revision if you use it directly; the wire and API may change at any commit. This is the method named `noise`
@@ -13,7 +14,7 @@ of `coqui-peer` (`PeerId`, `TrustStore`, the sans-IO `Handshake`); its API heade
 `PROTOCOL.md` ships here and is the wire.
 
 Imports: everything is at the crate root, including re-exports of `coqui-peer`'s `Established`,
-`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore` and `Weakening`.
+`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore`, `Weakening` and `pair`.
 
 No `unsafe` code (`#![forbid(unsafe_code)]`), no process-wide state. Nothing reads a file or an
 environment variable unless the caller names a path. Ephemeral and long-term keys, every chaining key, the export
@@ -62,7 +63,7 @@ Decided after the peer proved its key, never before.
   records nobody. The proved pending successor of an accepted key gets `prove_successor`, then
   `promote_successor` unless `RotationOptions::require_approval`, in which case it is refused until the
   caller promotes it.
-- There is no way to admit anyone here.
+- There is no way to admit anyone here: a stranger's session is a `PairingSession`.
 
 How strangers wait is the store's: a source at `WaitingLimits::per_source` refuses a newcomer and keeps
 those waiting, and records one new peer per `TrustStore::with_record_interval`. A flood can fill a source;
@@ -163,13 +164,65 @@ is `Error::LimitReached` from `seal` and ends the session.
 inside the session: **a plain message on the same transport comes from whoever carries it**, even after
 a successful handshake.
 
+## Pairing (`coqui_peer_noise::{PairingMethod, PairingSession, PairDial}`, `pair`)
+
+```rust
+pub const PAIR_EXPORT_LABEL: &str = "EXPORTER-coqui-pair";
+pub const MAX_PAIRING_RECORD: usize = 350;    // the longest record of an exchange; for FramedStream::set_max_message
+pub struct PairingMethod;                     // Clone; Debug
+impl PairingMethod {
+    pub fn new(identity: Identity) -> PairingMethod;             // admits any proved key, in both roles
+    pub fn with_responders(self, trust: Trust) -> PairingMethod; // a joiner verifies the responder
+    pub fn with_key_limit(self, bytes: u64) -> PairingMethod;
+    pub fn with_rekey(self, rekey: bool) -> PairingMethod;
+    pub fn with_random(self, random: Random) -> PairingMethod;
+    pub fn identity(&self) -> &Identity;
+    pub fn weakened(&self) -> Vec<Weakening>;                    // always lists any-with-key-proof for initiators
+}
+impl coqui_peer::Method for PairingMethod { /* name() = "noise"; initiate(); respond(source) */ }
+pub struct PairingHandshake;  // impl Handshake { Output = PairingSession, Framing::Message }
+pub struct PairingSession;    // no seal, no open: it runs one exchange
+impl PairingSession {
+    pub fn id(&self) -> &[u8; 32];
+    pub fn peer(&self) -> &KeyMaterial;
+    pub fn peer_id(&self) -> PeerId;
+    pub fn pair_channel(&self) -> Result<pair::Channel, Error>;  // the proved key; no caller names it
+    pub fn join<T: MessageTransport>(self, pairing: Pairing, transport: &mut T) -> Result<PairDial<'_, T>, Error>;
+    pub fn respond<T: MessageTransport + ReadTimeout>(self, store: &TrustStore, desk: &PairingDesk,
+        source: Option<SocketAddr>, transport: &mut T) -> Result<Paired, Error>;
+}
+impl<T: MessageTransport> PairDial<'_, T> {
+    pub fn shown(&self) -> Option<&Shown>;    // a PIN with its slot, or a device flow's user code
+    pub fn finish(self) -> Result<Paired, Error>;
+}
+```
+
+**A stranger's session is this type, and only this type.** `Noise` cannot admit an unknown key, and `PairingSession` cannot
+carry an application message, so what serves the application cannot be reached by proving just any key. Drive the handshake
+as `Noise`'s, then `join` or `respond`, which seal every message and end with a close record. `respond` blocks in
+`PairingDesk::wait` for the operator; each read waits until the exchange's deadline through `ReadTimeout`, and a joiner that
+goes quiet is told `Expired`. On success the responder has `accept_key`ed the joiner and the joiner stores `Paired::peer`.
+Then both reconnect under `Noise`, with `Trust::Store` or a pin, and the full key is what the handshake proves.
+
+- **PIN** (feature `pin`): no pin needed: the PIN authenticates both keys and the session's binding. A wrong PIN is
+  `Error::Pairing(PairingError::Refused(PairRefusal::WrongCode))` on both sides, and with the default one attempt burns the
+  PIN, so `desk.show_pin()` again and start over on a new connection and session.
+- **Invitation**: `join` refuses (`Error::Pairing(PairingError::Unverified)`) unless the proved key is the inviter's, before
+  anything is sent. Pin the inviter in `with_responders` too, to stop others at the handshake.
+- **Device flow**: `join` refuses unless `with_responders` verified the responder, or `Pairing::allow_unverified(true)`, which
+  lets a relay pair in place of both sides.
+
+Over a `FramedStream`, the handshake's limit is `MAX_HANDSHAKE_MESSAGE`, and the exchange needs `set_max_message` with
+`MAX_PAIRING_RECORD`. Behind a reverse proxy, pass the client's address as `source` from a header you trust, or every joiner
+counts as the proxy for `DeskLimits`.
+
 ## Errors
 
 `Error` (non-exhaustive): `Malformed` (not valid here: length, a key not in its one encoding or of small order, the
 peer presenting this side's key, or place in the exchange), `BadProof` (a handshake message does not decrypt),
 `Untrusted` (proved, and `Trust` does not admit it), `Unsupported` (no trust for that role), `State` (the handshake
 is over, `finish` too early, a binding too late), `Random`, `Record`, `Truncated`, `Closed`, `LimitReached` (see the
-session), `TooLong` (an export above 8160 bytes), `Key`, `Io(io::Error)`. `Display` is one lowercase clause and never
+session), `TooLong` (an export above 8160 bytes), `Key`, `Pairing(PairingError)`, `Io(io::Error)`. `Display` is one lowercase clause and never
 quotes input, a key or a path. A handshake is over after an error: nothing queued leaves, and `transmit` is `State`.
 
 ## Gotchas

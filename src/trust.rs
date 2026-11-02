@@ -51,3 +51,20 @@ impl Trust {
         false
     }
 }
+
+/// Whom a role of the handshake admits. Only a pairing method holds [`Admit::Any`], and what it
+/// ends in carries no application message.
+#[derive(Debug, Clone)]
+pub(crate) enum Admit {
+    Any,
+    Trust(Trust),
+}
+
+impl Admit {
+    pub(crate) fn admits(&self, key: &KeyMaterial, waiting: Option<Option<SocketAddr>>) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Trust(trust) => trust.admits(key, waiting),
+        }
+    }
+}

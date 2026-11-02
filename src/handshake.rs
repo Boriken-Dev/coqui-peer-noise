@@ -11,7 +11,7 @@ use crate::error::Error;
 use crate::identity::{Identity, key_material};
 use crate::noise::{DHLEN, TAGLEN, Xx};
 use crate::session::{DEFAULT_KEY_LIMIT, Limits, Session};
-use crate::trust::Trust;
+use crate::trust::{Admit, Trust};
 
 /// The method name: the `<method>` of `coqui-peer-<method>`, under which a trust store keeps the
 /// keys of this method.
@@ -40,8 +40,8 @@ pub(crate) fn field(out: &mut Vec<u8>, bytes: &[u8]) {
 #[derive(Debug, Clone)]
 struct Config {
     identity: Identity,
-    responders: Option<Trust>,
-    initiators: Option<Trust>,
+    responders: Option<Admit>,
+    initiators: Option<Admit>,
     key_limit: u64,
     rekey: bool,
     random: Random,
@@ -97,17 +97,31 @@ impl Noise {
         }))
     }
 
+    /// The method a [`PairingMethod`](crate::PairingMethod) runs: any proved key, in both roles.
+    pub(crate) fn admitting_anyone(identity: Identity) -> Self {
+        let mut method = Self::new(identity);
+        let config = Arc::make_mut(&mut method.0);
+        config.responders = Some(Admit::Any);
+        config.initiators = Some(Admit::Any);
+        method
+    }
+
+    /// Whether an initiator's peer is admitted by a pin or a store, and not as any proved key.
+    pub(crate) fn verifies_responders(&self) -> bool {
+        matches!(self.0.responders, Some(Admit::Trust(_)))
+    }
+
     /// Whom [`initiate`](Method::initiate) admits as the responder.
     #[must_use]
     pub fn with_responders(mut self, trust: Trust) -> Self {
-        Arc::make_mut(&mut self.0).responders = Some(trust);
+        Arc::make_mut(&mut self.0).responders = Some(Admit::Trust(trust));
         self
     }
 
     /// Whom [`respond`](Method::respond) admits as the initiator.
     #[must_use]
     pub fn with_initiators(mut self, trust: Trust) -> Self {
-        Arc::make_mut(&mut self.0).initiators = Some(trust);
+        Arc::make_mut(&mut self.0).initiators = Some(Admit::Trust(trust));
         self
     }
 
@@ -152,6 +166,18 @@ impl Noise {
     pub fn weakened(&self) -> Vec<Weakening> {
         let config = &self.0;
         let mut weakened = Vec::new();
+        for (setting, admit) in [
+            ("responders", &config.responders),
+            ("initiators", &config.initiators),
+        ] {
+            if matches!(admit, Some(Admit::Any)) {
+                weakened.push(Weakening::new(
+                    setting,
+                    "any-with-key-proof",
+                    "pinned or store",
+                ));
+            }
+        }
         if config.key_limit > DEFAULT_KEY_LIMIT {
             weakened.push(Weakening::new(
                 "key_limit",
@@ -300,7 +326,7 @@ impl NoiseHandshake {
 
     /// What every static key read must pass, then whether the peer is admitted. Trust is only ever
     /// asked about a key the handshake just proved.
-    fn admit(&self, xx: &Xx, trust: Option<&Trust>, waiting: bool) -> Result<KeyMaterial, Error> {
+    fn admit(&self, xx: &Xx, trust: Option<&Admit>, waiting: bool) -> Result<KeyMaterial, Error> {
         let key = xx.remote_static().ok_or(Error::State)?;
         let trust = trust.ok_or(Error::Unsupported)?;
         let material = key_material(key);
