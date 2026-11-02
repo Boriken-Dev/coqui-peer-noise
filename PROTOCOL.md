@@ -407,7 +407,9 @@ message is refused by its length before anything else. Errors never quote what t
 drops what it had queued and stays failed.
 
 The crate's `FramedStream` refuses a frame by its declared length before reading it, at `MAX_HANDSHAKE_MESSAGE`
-for the handshake, where `coqui_peer::drive_stream` would take up to 1 MiB.
+for the handshake, where `coqui_peer::drive_stream` would take up to 1 MiB. Its limit holds in both directions, a setting
+with nothing above it but the length field's 2^32 - 1. A read timeout set on it bounds a whole frame, so a peer sending one
+byte per timeout cannot outlast it.
 
 ## Erasure
 

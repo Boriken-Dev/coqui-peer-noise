@@ -41,11 +41,13 @@ impl<S> coqui_peer_noise::FramedStream<S>
 pub fn coqui_peer_noise::FramedStream<S>::into_inner(self) -> S
 pub const fn coqui_peer_noise::FramedStream<S>::new(S, usize) -> Self
 pub const fn coqui_peer_noise::FramedStream<S>::set_max_message(&mut self, usize)
-impl<S: alloc::io::read::Read + core::io::write::Write> coqui_peer::drive::MessageTransport for coqui_peer_noise::FramedStream<S>
+impl<S: alloc::io::read::Read + core::io::write::Write + coqui_peer::drive::ReadTimeout> coqui_peer::drive::MessageTransport for coqui_peer_noise::FramedStream<S>
 pub fn coqui_peer_noise::FramedStream<S>::recv(&mut self) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub fn coqui_peer_noise::FramedStream<S>::send(&mut self, &[u8]) -> core::io::error::Result<()>
 impl<S: coqui_peer::drive::ReadTimeout> coqui_peer::drive::ReadTimeout for coqui_peer_noise::FramedStream<S>
 pub fn coqui_peer_noise::FramedStream<S>::set_read_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
+impl<S: coqui_peer::drive::ReadTimeout> coqui_peer_noise::CurrentReadTimeout for coqui_peer_noise::FramedStream<S>
+pub fn coqui_peer_noise::FramedStream<S>::current_read_timeout(&self) -> core::option::Option<core::time::Duration>
 impl<S: coqui_peer::drive::WriteTimeout> coqui_peer::drive::WriteTimeout for coqui_peer_noise::FramedStream<S>
 pub fn coqui_peer_noise::FramedStream<S>::set_write_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
 pub struct coqui_peer_noise::Identity(_)
@@ -167,4 +169,8 @@ pub const coqui_peer_noise::METHOD: &str
 pub const coqui_peer_noise::PAIR_EXPORT_LABEL: &str
 pub const coqui_peer_noise::PROFILE: &str
 pub const coqui_peer_noise::PROTOCOL_NAME: &str
+pub trait coqui_peer_noise::CurrentReadTimeout: coqui_peer::drive::ReadTimeout
+pub fn coqui_peer_noise::CurrentReadTimeout::current_read_timeout(&self) -> core::option::Option<core::time::Duration>
+impl<S: coqui_peer::drive::ReadTimeout> coqui_peer_noise::CurrentReadTimeout for coqui_peer_noise::FramedStream<S>
+pub fn coqui_peer_noise::FramedStream<S>::current_read_timeout(&self) -> core::option::Option<core::time::Duration>
 pub fn coqui_peer_noise::random() -> coqui_peer::random::Random

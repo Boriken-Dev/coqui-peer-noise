@@ -81,7 +81,9 @@ pub struct Sealer {
 
 impl Sealer {
     /// One message as one record, to send whole and in this order. The message may be of any length:
-    /// a record holds as many Noise messages as it takes, each with its own length field and tag.
+    /// a record holds as many Noise messages as it takes, each with its own length field and tag. The
+    /// transport's frame limit is what bounds it, and a record the transport refuses has already used
+    /// its nonces, so the session cannot go on after that.
     ///
     /// # Errors
     ///

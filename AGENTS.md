@@ -96,11 +96,14 @@ impl NoiseHandshake {
 pub const MAX_HANDSHAKE_MESSAGE: usize = 96;
 pub struct FramedStream<S>;                   // Debug
 impl<S> FramedStream<S> {
-    pub const fn new(stream: S, max_message: usize) -> FramedStream<S>;
+    pub const fn new(stream: S, max_message: usize) -> FramedStream<S>;   // the limit in either direction
     pub const fn set_max_message(&mut self, max_message: usize);
     pub fn into_inner(self) -> S;
 }
-// MessageTransport for S: Read + Write; ReadTimeout and WriteTimeout as S has them
+// MessageTransport for S: Read + Write + ReadTimeout; ReadTimeout, CurrentReadTimeout, WriteTimeout as S has them
+pub trait CurrentReadTimeout: ReadTimeout {   // what ReadTimeout cannot say; PairingSession::respond needs it
+    fn current_read_timeout(&self) -> Option<Duration>;
+}
 impl coqui_peer::Handshake for NoiseHandshake { /* Output = Session, Framing::Message */ }
 ```
 
@@ -108,7 +111,10 @@ Run it with `coqui_peer::drive_messages` over a reliable, ordered message transp
 over a `FramedStream` for a byte stream (`coqui_peer::drive_stream` also works, and takes up to 1 MiB
 before the message length applies; `FramedStream` refuses a frame by its declared length, with an
 `InvalidData` I/O error), their `_until` forms for a deadline (**the caller bounds the handshake**), or a
-`receive`/`transmit` loop. Three messages, of 32, 96 and 64 bytes, each binary. `initiate` draws the
+`receive`/`transmit` loop. A read timeout set on a `FramedStream` bounds a whole `recv`, however many reads of the
+stream it takes, so a peer sending a byte at a time cannot outlast it; zero is already spent, `TimedOut` with nothing
+read; a `recv` that timed out keeps what it read of its frame for the next. A timeout set on the stream itself applies
+per read. Three messages, of 32, 96 and 64 bytes, each binary. `initiate` draws the
 ephemeral key and the first `transmit` gives the first message; `Error::Unsupported` without trust for that role.
 `finish` gives `Established { peer, key: Some(key), session }`.
 
@@ -142,7 +148,9 @@ impl Opener { pub fn open(&mut self, record: &[u8]) -> Result<Option<Vec<u8>>, E
 
 Each message is one record, sent whole and in order on a reliable transport, in binary frames. A message may be of
 any length: a record is as many Noise messages as it takes (each at most 65535 bytes), and a message of up to 65518
-bytes is one Noise message and 19 bytes more than itself. What bounds it is the transport's frame limit.
+bytes is one Noise message and 19 bytes more than itself. What bounds it is the transport's frame limit: `FramedStream`'s
+is `max_message`, in both directions, up to its length field's 2^32 - 1. A record a transport refuses has already used
+its nonces, so the session cannot go on after that: end it.
 
 **End every stream with `close`, and call `verify_end` when the transport ends.** A relay can cut the
 connection at any record boundary; `verify_end` is `Error::Truncated` unless the peer's close record
