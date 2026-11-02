@@ -25,13 +25,22 @@ export function haveCargo() {
 
 /** Builds once, so a test's timeout does not include compiling. */
 export function buildPeer() {
-  const built = spawnSync('cargo', ['build', '--quiet', '--example', 'peer'], {cwd: root, stdio: 'inherit'});
+  const built = spawnSync('cargo', ['build', '--quiet', '--features', 'pin', '--examples'], {cwd: root, stdio: 'inherit'});
   if (built.status !== 0) throw new Error('the Rust example does not build');
 }
 
 /** `peer` running: `next()` is its next line, `send(line)` writes one, `exit` its status. */
 export function startPeer(...args) {
-  const child = spawn('cargo', ['run', '--quiet', '--example', 'peer', '--', ...args], {
+  return startExample('peer', args);
+}
+
+/** As `startPeer`, for the example that pairs by PIN first. */
+export function startPairPeer(...args) {
+  return startExample('pair', args);
+}
+
+function startExample(name, args) {
+  const child = spawn('cargo', ['run', '--quiet', '--features', 'pin', '--example', name, '--', ...args], {
     cwd: root, stdio: ['pipe', 'pipe', 'pipe'],
   });
   const reader = createInterface({input: child.stdout})[Symbol.asyncIterator]();

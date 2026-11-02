@@ -1,16 +1,16 @@
 // A real browser, where Node's WebCrypto stands in nowhere: the module in a page on a secure origin,
-// its key kept in IndexedDB, reproducing the vectors and proving itself to the Rust responder over a
-// real socket. Point COQUI_TEST_BROWSER at Chrome or Edge when it is not in a usual place; the report
+// its key kept in IndexedDB, reproducing the vectors, proving itself to the Rust responder over a real
+// socket, and pairing with a Rust responder by PIN. Point COQUI_TEST_BROWSER at Chrome or Edge when it is not in a usual place; the report
 // the page sends is printed as a diagnostic.
 import test, {before} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {existsSync, mkdtempSync, readFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {rm} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {buildPeer, dial, haveCargo, startPeer, toHex, unavailable, unhex} from './support.mjs';
+import {buildPeer, dial, haveCargo, startPairPeer, startPeer, toHex, unavailable, unhex} from './support.mjs';
 
 const candidates = [
   process.env.COQUI_TEST_BROWSER,
@@ -26,7 +26,8 @@ before(() => { if (cargo && browser) buildPeer(); }, {timeout: 600_000});
 
 const page = `<!doctype html><meta charset="utf-8"><title>test</title><script type="module">
 import {
-  generateIdentity, importIdentity, loadOrCreateIdentity, createInitiator, createResponder, __testing,
+  generateIdentity, importIdentity, loadOrCreateIdentity, createInitiator, createResponder,
+  createPairingInitiator, createPairingResponder, createPairingDesk, __testing,
 } from '/index.mjs';
 const post = async (path, body) => (await fetch(path, {method: 'POST', body})).text();
 const hex = bytes => [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
@@ -96,9 +97,88 @@ async function refusesEverything(vectors) {
   if (hex(session.id) !== vectors.session.id) accepted.push('the id differs');
   return accepted;
 }
+// The pairing vectors, to the byte, as the joiner: the arithmetic under BigInt in this engine.
+async function pairingVectors(known, spake2) {
+  const encode = text => new TextEncoder().encode(text);
+  const a = await __testing.spakeStartWith(true, encode(spake2.password), encode(spake2.idA), encode(spake2.idB), BigInt(spake2.scalarA));
+  const b = await __testing.spakeStartWith(false, encode(spake2.password), encode(spake2.idA), encode(spake2.idB), BigInt(spake2.scalarB));
+  if (hex(a.message) !== spake2.messageA || hex(b.message) !== spake2.messageB) return 'the crate answer: messages';
+  if (hex(await __testing.spakeFinish(a.state, b.message)) !== spake2.key) return 'the crate answer: key';
+  const ephemeralOf = side => async () => ({
+    privateKey: await crypto.subtle.importKey('pkcs8', unhex(side.ephemeralPkcs8), X25519, false, ['deriveBits']),
+    publicKey: await crypto.subtle.importKey('raw', unhex(side.ephemeralPublic), X25519, true, []),
+  });
+  let draw = unhex(known.joinerPakeRandom);
+  const near = await createPairingInitiator(await importIdentity(unhex(known.joiner.pkcs8)), {
+    ephemeral: ephemeralOf(known.joiner),
+    random(length) {
+      const out = draw.slice(0, length);
+      draw = draw.slice(length);
+      return out;
+    },
+  });
+  await near.hello();
+  const {pairing} = await near.answer(unhex(known.handshake[1]));
+  let [sent, read] = [0, 0];
+  let wrong = null;
+  await pairing.join(known.right.pin, {
+    async send(bytes) {
+      if (hex(bytes) !== known.right.joiner[sent]?.record) wrong ??= 'record ' + sent;
+      sent += 1;
+    },
+    async recv() {
+      read += 1;
+      return unhex(known.right.responder[read - 1].record);
+    },
+  });
+  return wrong ?? (sent === known.right.joiner.length ? 'same' : 'too few records');
+}
+// A PIN pairing with a Rust responder, on real sockets the test relays: a wrong PIN, then a right one,
+// then the ordinary method under the key that was paired.
+async function pairWithRust(identity) {
+  const {peerId, pin, wrong} = JSON.parse(await post('/pair/start', ''));
+  const attempt = async guess => {
+    await post('/pair/dial', '');
+    const near = await createPairingInitiator(identity);
+    await post('/pair/send', hex(await near.hello()));
+    const {reply, pairing, peerId: proved} = await near.answer(unhex(await post('/pair/recv', '')));
+    await post('/pair/send', hex(reply));
+    const paired = await pairing.join(guess, {
+      send: async bytes => { await post('/pair/send', hex(bytes)); },
+      recv: async () => {
+        const text = await post('/pair/recv', '');
+        return text === 'end' ? null : unhex(text);
+      },
+    });
+    return {paired, proved};
+  };
+  const result = {};
+  try {
+    await attempt(wrong);
+    result.wrongPin = 'accepted';
+  } catch (error) {
+    result.wrongPin = error.refusal ?? String(error);
+  }
+  const next = await post('/pair/nextPin', '');
+  const {paired} = await attempt(next);
+  result.pairedRust = paired.peerId === peerId;
+  await post('/pair/dial', '');
+  const initiator = await createInitiator(identity, paired.peerId);
+  await post('/pair/send', hex(await initiator.hello()));
+  const {reply, session} = await initiator.answer(unhex(await post('/pair/recv', '')));
+  await post('/pair/send', hex(reply));
+  await post('/pair/send', hex(await session.seal('ping after pairing')));
+  result.echoAfterPairing = new TextDecoder().decode(await session.open(unhex(await post('/pair/recv', ''))));
+  await post('/pair/send', hex(await session.close()));
+  result.closedAfterPairing = (await session.open(unhex(await post('/pair/recv', '')))) === null;
+  session.verifyEnd();
+  result.pinUnused = pin !== next;
+  return result;
+}
 try {
   const report = {secure: isSecureContext, userAgent: navigator.userAgent};
-  const {published: publishedVectors, session: sessionVectors} = await (await fetch('/vectors')).json();
+  const {published: publishedVectors, session: sessionVectors, pairing: pairingKnown, spake2} = await (await fetch('/vectors')).json();
+  report.pairingVectors = await pairingVectors(pairingKnown, spake2);
   report.publishedVectors = (await Promise.all(publishedVectors.vectors.map(published))).every(Boolean);
   report.publishedCount = publishedVectors.vectors.length;
   report.vectorsAccepted = await refusesEverything(sessionVectors);
@@ -136,6 +216,7 @@ try {
   report.closed = (await session.open(unhex(closing))) === null;
   session.verifyEnd();
   session.destroy();
+  Object.assign(report, await pairWithRust(second));
   report.ok = true;
   await post('/result', JSON.stringify(report));
 } catch (error) {
@@ -150,10 +231,16 @@ test('a browser keeps its key, reproduces the vectors and proves itself to a Rus
   const vectors = JSON.stringify({
     published: JSON.parse(readFileSync(new URL('../../../../tests/vectors/published.json', import.meta.url))),
     session: JSON.parse(readFileSync(new URL('../../../../tests/vectors/session.json', import.meta.url))),
+    pairing: JSON.parse(readFileSync(new URL('../../../../tests/vectors/pairing.json', import.meta.url))),
+    spake2: JSON.parse(readFileSync(new URL('../../../../tests/vectors/spake2.json', import.meta.url))),
   });
   let peer;
   let socket;
   let sessionId;
+  let pairPeer;
+  let pairPort;
+  let pairSocket;
+  let pairStore;
   let settle;
   const finished = new Promise(resolve => { settle = resolve; });
   const server = createServer(async (request, response) => {
@@ -182,6 +269,34 @@ test('a browser keeps its key, reproduces the vectors and proves itself to a Rus
       socket.send(unhex(body));
       sessionId = JSON.parse(await peer.next()).id;
       return answer('text/plain', '');
+    }
+    if (request.url === '/pair/start') {
+      pairStore = mkdtempSync(join(tmpdir(), 'coqui-browser-pair-'));
+      pairPeer = startPairPeer('responder', pairStore);
+      const {peerId} = JSON.parse(await pairPeer.next());
+      pairPort = Number(await pairPeer.next());
+      const {pin} = JSON.parse(await pairPeer.next());
+      return answer('application/json', JSON.stringify({peerId, pin, wrong: pin === '000000' ? '000001' : '000000'}));
+    }
+    if (request.url === '/pair/dial') {
+      pairSocket?.destroy();
+      pairSocket = await dial(pairPort);
+      return answer('text/plain', '');
+    }
+    if (request.url === '/pair/send') {
+      pairSocket.send(unhex(body));
+      return answer('text/plain', '');
+    }
+    if (request.url === '/pair/recv') {
+      const message = await pairSocket.next();
+      return answer('text/plain', message === null ? 'end' : toHex(message));
+    }
+    if (request.url === '/pair/nextPin') {
+      pairSocket.destroy();
+      for (;;) {
+        const line = JSON.parse(await pairPeer.next());
+        if (line.pin) return answer('text/plain', line.pin);
+      }
     }
     if (request.url === '/result') {
       settle(JSON.parse(body));
@@ -223,13 +338,23 @@ test('a browser keeps its key, reproduces the vectors and proves itself to a Rus
     assert.equal(report.id, sessionId);
     assert.equal(report.closed, true);
     assert.equal(await peer.exit, 0, peer.errors());
+    assert.equal(report.pairingVectors, 'same');
+    assert.equal(report.wrongPin, 'wrong-code');
+    assert.equal(report.pairedRust, true);
+    assert.equal(report.pinUnused, true);
+    assert.equal(report.echoAfterPairing, 'echo:ping after pairing');
+    assert.equal(report.closedAfterPairing, true);
+    assert.equal(await pairPeer.exit, 0, pairPeer.errors());
   } finally {
     socket?.destroy();
+    pairSocket?.destroy();
     peer?.child.kill();
+    pairPeer?.child.kill();
     running.kill();
     await closed;
     server.close();
     server.closeAllConnections();
+    if (pairStore) rmSync(pairStore, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});
     // Chrome's helpers can outlive its main process and still write here, and a directory left in
     // the temporary folder is no reason to fail a test whose assertions passed.
     await rm(profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 200})
