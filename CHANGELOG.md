@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `Identity`: an X25519 key in RFC 8410's PKCS#8, generated, read and written. The static key is the identity, and
   its id is the SHA-256 of its RFC 8410 public key.
 - `Trust`: fixed pins, or a live `TrustStore` with rotation and waiting entries, bounded by the store.
-- `FramedStream`: refuses a frame by its declared length before reading it.
+- `FramedStream`: refuses a frame by its declared length before reading it, and one above its limit before sending it; a
+  read timeout on it bounds a whole frame. `CurrentReadTimeout`: a transport saying what read timeout it has.
 - `NoiseHandshake::with_binding`: an optional outer binding in the Noise prologue, for an endpoint that ends TLS
   itself, refused once the prologue is fixed.
 - The JavaScript module in `bindings/js/coqui-peer-noise`, with the same wire in both roles, over `crypto.subtle`.

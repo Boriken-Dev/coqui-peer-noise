@@ -24,7 +24,7 @@ pub use coqui_peer::{
     Established, KeyMaterial, MessageTransport, Method, PeerId, Random, TrustStore, Weakening, pair,
 };
 pub use error::Error;
-pub use framed::{FramedStream, MAX_HANDSHAKE_MESSAGE};
+pub use framed::{CurrentReadTimeout, FramedStream, MAX_HANDSHAKE_MESSAGE};
 pub use handshake::{METHOD, Noise, NoiseHandshake, PROFILE, random};
 pub use identity::Identity;
 pub use noise::PROTOCOL_NAME;
