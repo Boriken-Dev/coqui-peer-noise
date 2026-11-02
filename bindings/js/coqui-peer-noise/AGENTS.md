@@ -126,9 +126,11 @@ const initiator = await createInitiator(identity, peerId);
 A session runs one exchange, sealed, and its keys go when it ends, however it ends. Close the connection then, or the other
 side waits for its transport. A joiner has no deadline of its own: bound it by ending the transport, which `recv` reports as
 `null`. **A failure with a `refusal` property is the protocol saying no**: `wrong-code`, `expired`,
-`exhausted`, `throttled`, `denied` or `disabled`. With the default of one attempt, a wrong PIN burns it: `desk.showPin()` again
-and start over on a new connection. `accept` runs only after the PIN confirmed, and the joiner hears it worked only after
-`accept` returned.
+`exhausted`, `throttled`, `denied` or `disabled`. With the default of one attempt, a wrong PIN burns it at the desk:
+`desk.showPin()` again and start over on a new connection. **At the joiner a `wrong-code` spends the PIN: never join with it
+again, and get a new one.** A relay posing as the responder never reaches the real desk, so each run with the same PIN gives it
+a new guess, and a host that retries by itself loses the PIN's guarantee. `accept` runs only after the PIN confirmed, and the
+joiner hears it worked only after `accept` returned.
 
 - `firstMessageTimeout` (`createPairingResponder`): the milliseconds a joiner has, from the call to `respond`, to send its
   first message, under the desk's `pinTtl`. Default `DEFAULT_FIRST_MESSAGE_TIMEOUT`, no floor: `0` is expired with nothing read.

@@ -298,6 +298,10 @@ impl PairingSession {
     /// ([`PairDial::shown`]) or the end. An invitation's secret is only ever sent sealed, and
     /// [`Pairing::join`] refuses unless the proved key is the inviter's.
     ///
+    /// **A `WrongCode` spends the PIN: never join with it again, and get a new one.** Attempts are
+    /// counted at the responder's desk, which a relay posing as the responder never reaches, so each
+    /// run with the same PIN gives such a relay a new guess.
+    ///
     /// # Errors
     ///
     /// [`Error::Pairing`] when refused, [`Error::Io`] from the transport, [`Error::Record`] for a

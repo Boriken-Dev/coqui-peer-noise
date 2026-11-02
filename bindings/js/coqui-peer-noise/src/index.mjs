@@ -111,7 +111,8 @@ function binaryOf(input) {
 
 /**
  * Whether `key` is the one encoding of a value. RFC 7748 section 5 has X25519 mask the top bit and
- * reduce modulo p, so without this a peer could present one key under several encodings, and ids.
+ * reduce modulo p, so without this one value would have several encodings, and so ids. It does not make
+ * one private key one id: PROTOCOL.md says what a point of order 8 does.
  */
 function isCanonical(key) {
   const atOrAboveP = key[31] === 0x7f && key[0] >= 0xed && key.subarray(1, 31).every(byte => byte === 0xff);
@@ -1134,7 +1135,9 @@ function pairingSessionOf(session, local, remote, verified, random, firstMessage
     /**
      * Joins with the PIN a person typed, each message sealed. Resolves to the responder's
      * `{peerId, peer, mode: 'pin'}`, to pin from now on; rejects with an `Error` whose `refusal` says why
-     * when either side refused.
+     * when either side refused. A `wrong-code` spends the PIN: never join with it again, and get a new one.
+     * Attempts are counted at the responder's desk, which a relay posing as the responder never reaches, so
+     * each run with the same PIN gives such a relay a new guess.
      */
     async join(pin, transport) {
       once();

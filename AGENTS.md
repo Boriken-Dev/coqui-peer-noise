@@ -228,7 +228,9 @@ transport lets through.
 
 - **PIN** (feature `pin`): no pin needed: the PIN authenticates both keys and the session's binding. A wrong PIN is
   `Error::Pairing(PairingError::Refused(PairRefusal::WrongCode))` on both sides, and with the default one attempt burns the
-  PIN, so `desk.show_pin()` again and start over on a new connection and session.
+  PIN at the desk, so `desk.show_pin()` again and start over on a new connection and session. **At the joiner a `WrongCode`
+  spends the PIN: never join with it again, and get a new one.** A relay posing as the responder never reaches the real desk,
+  so each run with the same PIN gives it a new guess. A host that retries by itself loses the PIN's guarantee.
 - **Invitation**: `join` refuses (`Error::Pairing(PairingError::Unverified)`) unless the proved key is the inviter's, before
   anything is sent. Pin the inviter in `with_responders` too, to stop others at the handshake.
 - **Device flow**: `join` refuses unless `with_responders` verified the responder, or `Pairing::allow_unverified(true)`, which

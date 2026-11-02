@@ -39,8 +39,9 @@ The two have different keys and so different ids.
 
 Two strangers come to accept each other's keys through a session that carries nothing else: a person reads a short PIN on
 one side and types it on the other, and both run SPAKE2 sealed inside the session, bound to it. Afterwards each reconnects
-under the ordinary method, and the full key is what the handshake proves. A carrier gets one guess at the PIN per run, and a
-wrong guess uses up the PIN. Rust has the invitation and the device flow as well; the JavaScript module has the typed PIN, in
+under the ordinary method, and the full key is what the handshake proves. A carrier gets one guess at the PIN per run. At the
+responder a wrong guess uses up the PIN; at the joiner a `wrong-code` means the PIN is spent, so get a new one and never retry
+it. Rust has the invitation and the device flow as well; the JavaScript module has the typed PIN, in
 both roles, over `BigInt` arithmetic that is not constant-time. `PROTOCOL.md` says what that leaves open.
 
 ## How a key becomes an id

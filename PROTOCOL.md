@@ -150,8 +150,15 @@ What A costs:
   "every message after the proof is protected by keys that came out of it".
 
 Each encoding is the only one: a key whose top bit is set, or at or above p, is refused. RFC 7748 section 5
-has X25519 mask that bit and reduce modulo p, so without this one private key would answer to several
-public encodings and so several ids.
+has X25519 mask that bit and reduce modulo p, so without this one value would have several encodings and so several ids.
+
+**One private key still proves 8 public keys, and so 8 ids.** A public key plus a point of order 8 is canonical and of large
+order, and X25519 clamps its scalars to multiples of 8, so the DH output, and with it the proof, is the same as for the
+honest key. Only the holder of the private key can do this, and only for its own key; a relay changing an ephemeral this way
+fails, since the two transcripts differ. **No trust decision depends on one key having one id.** Each id is admitted only if it
+is itself pinned, or accepted in a store, and making eight keys costs the same. So a count of ids is not a count of private
+keys. Section 14's "Channel binding" warns about equivalent public keys; the session id and exports differ per run anyway. A
+torsion check would need a group operation in each language for no attack it stops, so there is none.
 
 ## Handshake
 
@@ -338,7 +345,11 @@ pin or a store.
 - **PIN.** A proved key of anyone is enough: the PIN authenticates both keys and the binding. A relay forwarding everything
   pairs the real parties with each other and learns nothing but sizes. A relay forwarding between two sessions of its own
   fails at the first message, since the keys differ. A relay that runs the exchange itself with each side, under its own
-  key, has one guess at the PIN per run: with the default of one attempt per PIN, a wrong guess burns it.
+  key, has one guess at the PIN per run. With the default of one attempt per PIN, a wrong guess at the responder burns it.
+  **At the joiner nothing burns it**: a relay posing as the responder never reaches the real desk, so the joiner still holds
+  the PIN, and each new run with it is a new guess, online and one at a time. So a joiner's `wrong-code` spends the PIN: never
+  run another exchange with it, and get a new one. A person will not retry a million times; a host retrying by itself, on a
+  reconnect loop, loses the PIN's guarantee.
 - **Invitation** (Rust). The secret goes as is, so the proved key must be the inviter's: `Pairing::join` refuses otherwise
   before anything is sent, and the secret goes only inside a record.
 - **Device flow** (Rust). The joiner must have verified the responder by a pin or a store, or `join` refuses unless told
