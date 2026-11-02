@@ -340,6 +340,239 @@ test('a relay that runs the exchange with each side under its own key has one gu
   assert.equal(desk.shownPin(), null, 'its guess burned the PIN');
 });
 
+// A peer that follows nothing: an ordinary session has `seal` and `open`, and the same handshake on the
+// wire, so it can say anything in the exchange. The transcript and keys here are this file's own, written
+// from PROTOCOL.md apart from what the module does.
+const asBytes = text => encoder.encode(text);
+const short = bytes => Uint8Array.from([bytes.length, ...bytes]);
+const wide = bytes => Uint8Array.from([0, 0, 0, bytes.length, ...bytes]);
+const keyOf = identity => {
+  const spki = Buffer.from(identity.publicKey, 'base64url');
+  return Uint8Array.from([...short(asBytes('noise')), ...short(asBytes('PUBLIC KEY')), ...wide(spki)]);
+};
+const plain = (...parts) => Uint8Array.from(parts.flatMap(part => (typeof part === 'number' ? [part] : [...part])));
+const NO_SLOT = 0xff;
+const TYPED = 1;
+const refusedWith = byte => `0108${byte.toString(16).padStart(2, '0')}`;
+
+async function againstResponder(joiner, responder) {
+  const near = await createInitiator(joiner, responder.peerId);
+  const far = await createPairingResponder(responder);
+  const {reply, session} = await near.answer(await far.challenge(await near.hello()));
+  const {pairing} = await far.accept(reply);
+  return {session, pairing};
+}
+
+async function againstJoiner(joiner, responder) {
+  const near = await createPairingInitiator(joiner);
+  const far = await createResponder(responder, {allowClient: async () => true});
+  const {reply, pairing} = await near.answer(await far.challenge(await near.hello()));
+  const {session} = await far.accept(reply);
+  return {session, pairing};
+}
+
+const talking = (session, end) => ({
+  send: async message => end.send(await session.seal(message)),
+  recv: async () => session.open(await end.recv()),
+});
+
+async function confirmations(shared, transcript) {
+  const key = async info => {
+    const ikm = await webcrypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+    const bits = await webcrypto.subtle.deriveBits(
+      {name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(), info: asBytes(info)}, ikm, 256,
+    );
+    return webcrypto.subtle.importKey('raw', bits, {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
+  };
+  const mac = async name => new Uint8Array(await webcrypto.subtle.sign('HMAC', await key(`coqui-pair ${name} confirmation`), transcript));
+  return {joiner: await mac('joiner'), responder: await mac('responder')};
+}
+
+const transcriptOf = (joiner, responder, joinerMessage, responderMessage, binding) => plain(
+  asBytes('coqui-pair pin'), keyOf(joiner), keyOf(responder), NO_SLOT, short(joinerMessage), short(responderMessage), 1, wide(binding),
+);
+
+/** A joiner computing everything itself, up to the confirmation it is told to send. */
+async function joinerByHand(pin, {binding, tag} = {}) {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  const desk = createPairingDesk();
+  desk.showPin();
+  const {session, pairing} = await againstResponder(joiner, responder);
+  const [a, b, close] = pipe();
+  const accepted = [];
+  const serving = pairing.respond(desk, b, {accept: async id => { accepted.push(id); }}).finally(close);
+  const peer = talking(session, a);
+  await peer.send(plain(1, 1, TYPED, keyOf(joiner)));
+  assert.equal(toHex(await peer.recv()), toHex(plain(1, 2, keyOf(responder), NO_SLOT)));
+  const {state, message} = await spakeStartWith(
+    true, asBytes(pin(desk)), asBytes(joiner.peerId), asBytes(responder.peerId), 1234567n,
+  );
+  await peer.send(plain(1, 3, short(message)));
+  const reply = await peer.recv();
+  assert.equal(toHex(reply.subarray(0, 3)), '010421');
+  const received = reply.subarray(3, 36);
+  const shared = await spakeFinish(state, received);
+  const realBinding = await session.export('EXPORTER-coqui-pair', 32);
+  const transcript = transcriptOf(joiner, responder, message, received, binding ?? realBinding);
+  const macs = await confirmations(shared, transcript);
+  return {joiner, responder, peer, serving, accepted, macs, reply, sendTag: () => peer.send(plain(1, 5, tag ?? macs.joiner))};
+}
+
+test('a joiner computing everything itself is accepted, so what the refusals below refuse is only what they change', async () => {
+  let shown;
+  const run = await joinerByHand(desk => { shown = desk.shownPin().pin; return shown; });
+  assert.equal(toHex(run.reply.subarray(36)), toHex(run.macs.responder), 'the responder\'s MAC is the one PROTOCOL.md gives');
+  await run.sendTag();
+  assert.equal((await run.serving).peerId, run.joiner.peerId);
+  assert.deepEqual(run.accepted, [run.joiner.peerId]);
+});
+
+test('a responder refuses a confirmation that is not the MAC, and accepts nobody', async () => {
+  const run = await joinerByHand(desk => desk.shownPin().pin, {tag: new Uint8Array(32)});
+  await run.sendTag();
+  await assert.rejects(run.serving, {refusal: 'wrong-code'});
+  assert.deepEqual(run.accepted, []);
+});
+
+test('a responder refuses a confirmation made under another session\'s binding', async () => {
+  const run = await joinerByHand(desk => desk.shownPin().pin, {binding: new Uint8Array(32).fill(7)});
+  await run.sendTag();
+  await assert.rejects(run.serving, {refusal: 'wrong-code'});
+  assert.deepEqual(run.accepted, []);
+});
+
+test('a responder refuses a confirmation sent for the wrong side: the two keys differ', async () => {
+  const run = await joinerByHand(desk => desk.shownPin().pin);
+  await run.peer.send(plain(1, 5, run.macs.responder));
+  await assert.rejects(run.serving, {refusal: 'wrong-code'});
+  assert.deepEqual(run.accepted, []);
+});
+
+test('a confirmation with no PIN behind it does not pass: right bytes need the right PIN', async () => {
+  const run = await joinerByHand(desk => other(desk.shownPin().pin));
+  await run.sendTag();
+  await assert.rejects(run.serving, {refusal: 'wrong-code'});
+  assert.deepEqual(run.accepted, []);
+});
+
+/** The responder's answer to a first message, with a desk that has a PIN unless told otherwise. */
+async function helloRefused(message, {show = true} = {}) {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  const desk = createPairingDesk();
+  if (show) desk.showPin();
+  const {session, pairing} = await againstResponder(joiner, responder);
+  const [a, b, close] = pipe();
+  const serving = pairing.respond(desk, b, {accept: async () => assert.fail('not accepted')})
+    .then(() => 'served', error => error).finally(close);
+  const peer = talking(session, a);
+  await peer.send(message(joiner));
+  const answer = await peer.recv().catch(() => null);
+  const outcome = await serving;
+  return {answer: answer && toHex(answer), outcome};
+}
+
+test('a first message of another version, with more after it, or naming another key, ends it with no answer', async () => {
+  const stranger = await generateIdentity();
+  for (const [name, message] of [
+    ['version', joiner => plain(2, 1, TYPED, keyOf(joiner))],
+    ['more', joiner => plain(1, 1, TYPED, keyOf(joiner), 0)],
+    ['key', () => plain(1, 1, TYPED, keyOf(stranger))],
+    ['mode', joiner => plain(1, 1, 9, keyOf(joiner))],
+    ['kind', joiner => plain(1, 3, TYPED, keyOf(joiner))],
+  ]) {
+    const {answer, outcome} = await helloRefused(message);
+    assert.equal(answer, null, name);
+    assert.match(outcome.message, /malformed/, name);
+    assert.equal(outcome.refusal, undefined, name);
+  }
+});
+
+test('a responder with no PIN refuses at the first message, and sends no ready', async () => {
+  const {answer, outcome} = await helloRefused(joiner => plain(1, 1, TYPED, keyOf(joiner)), {show: false});
+  assert.equal(answer, refusedWith(3));
+  assert.equal(outcome.refusal, 'exhausted');
+});
+
+test('a responder refuses the modes it does not offer, as disabled', async () => {
+  for (const mode of [0, 2, 3]) {
+    const {answer, outcome} = await helloRefused(joiner => plain(1, 1, mode, keyOf(joiner)));
+    assert.equal(answer, refusedWith(6), String(mode));
+    assert.equal(outcome.refusal, 'disabled', String(mode));
+  }
+});
+
+test('a message that arrives after the deadline is refused, even when the timer has not fired', async () => {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  let clock = 1000;
+  const desk = createPairingDesk({pinTtl: 60_000, now: () => clock});
+  desk.showPin();
+  const {session, pairing} = await againstResponder(joiner, responder);
+  const [a, b, close] = pipe();
+  const serving = pairing.respond(desk, b, {accept: async () => assert.fail('not accepted')})
+    .then(() => 'served', error => error).finally(close);
+  const peer = talking(session, a);
+  await peer.send(plain(1, 1, TYPED, keyOf(joiner)));
+  await peer.recv();
+  clock += 60_000;
+  // A PIN shown just now is alive: what has run out is this exchange's time.
+  assert.notEqual(desk.showPin().expires, clock);
+  const {message} = await spakeStartWith(true, asBytes('123456'), asBytes(joiner.peerId), asBytes(responder.peerId), 5n);
+  await peer.send(plain(1, 3, short(message)));
+  assert.equal(toHex(await peer.recv()), refusedWith(2), 'no reply, and no attempt taken');
+  assert.notEqual(desk.shownPin(), null);
+  assert.equal((await serving).refusal, 'expired');
+});
+
+test('a joiner refuses a key it did not prove, more after a message, and a close in the middle', async () => {
+  const stranger = await generateIdentity();
+  const run = async answer => {
+    const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+    const {session, pairing} = await againstJoiner(joiner, responder);
+    const [a, b, close] = pipe();
+    const joining = pairing.join('123456', a).finally(close);
+    await session.open(await b.recv());
+    await answer(session, b, responder);
+    return joining;
+  };
+  const say = message => async (session, end) => end.send(await session.seal(message));
+  await assert.rejects(run(say(plain(1, 2, keyOf(stranger), NO_SLOT))), /malformed/);
+  await assert.rejects(run((session, end, responder) => say(plain(1, 2, keyOf(responder), NO_SLOT, 0))(session, end)), /malformed/);
+  await assert.rejects(run((session, end, responder) => say(plain(1, 2, keyOf(responder), 3))(session, end)), /malformed/);
+  await assert.rejects(run((session, end, responder) => say(plain(2, 2, keyOf(responder), NO_SLOT))(session, end)), /malformed/);
+  await assert.rejects(run(say(plain(1, 7, keyOf(stranger)))), /malformed/);
+  await assert.rejects(run(say(plain(1, 8, 6))), {refusal: 'disabled'});
+  await assert.rejects(run(say(plain(1, 8, 99))), /malformed/);
+  await assert.rejects(run(async (session, end) => end.send(await session.close())), /truncated/);
+});
+
+test('a joiner refuses a responder whose last message names another key', async () => {
+  const [joiner, responder, stranger] = [await generateIdentity(), await generateIdentity(), await generateIdentity()];
+  const {session, pairing} = await againstJoiner(joiner, responder);
+  const [a, b, close] = pipe();
+  const joining = pairing.join('123456', a).finally(close);
+  const peer = talking(session, b);
+  await peer.recv();
+  await peer.send(plain(1, 2, keyOf(responder), NO_SLOT));
+  const pake = await peer.recv();
+  const received = pake.subarray(3);
+  const {state, message} = await spakeStartWith(false, asBytes('123456'), asBytes(joiner.peerId), asBytes(responder.peerId), 9n);
+  const shared = await spakeFinish(state, received);
+  const binding = await session.export('EXPORTER-coqui-pair', 32);
+  const macs = await confirmations(shared, transcriptOf(joiner, responder, received, message, binding));
+  await peer.send(plain(1, 4, short(message), macs.responder));
+  const confirm = await peer.recv();
+  assert.equal(toHex(confirm), toHex(plain(1, 5, macs.joiner)), 'its MAC is the one PROTOCOL.md gives');
+  await peer.send(plain(1, 7, keyOf(stranger)));
+  await assert.rejects(joining, /malformed/);
+});
+
+test('a desk draws without bias: a word above the last whole multiple is drawn again', () => {
+  const words = [[0xff, 0xff, 0xff, 0xff], [0, 0, 0, 1]];
+  const desk = createPairingDesk({pinAlphabet: 'abc', pinLength: 1, random: () => Uint8Array.from(words.shift())});
+  assert.equal(desk.showPin().pin, 'b');
+  assert.equal(words.length, 0);
+});
+
 /** A whole run against the records Rust made: what this side sends must match them to the byte. */
 function replay(side, run) {
   const ours = run[side];
