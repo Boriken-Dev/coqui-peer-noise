@@ -96,7 +96,8 @@ each chaining key as bytes, so those exist in JavaScript memory during a handsha
 ## Pairing
 
 A stranger's handshake ends in a `pairing`, and never in a session: it has no `seal` or `open`, so what serves the application
-cannot be reached by proving just any key. Once paired, both reconnect with `createInitiator` and `createResponder`, and the
+cannot be reached by proving just any key. The two purposes differ in the prologue, so a run of one against the other fails at
+the second message. Once paired, both reconnect with `createInitiator` and `createResponder`, and the
 full key is what the handshake proves.
 
 ```js

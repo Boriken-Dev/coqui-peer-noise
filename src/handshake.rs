@@ -20,6 +20,11 @@ pub const METHOD: &str = "noise";
 /// This wire's name, first in the Noise prologue, so a run under another profile fails.
 pub const PROFILE: &str = "dev.boriken.coqui.peer-noise/v1";
 
+/// What a run is for, second in the Noise prologue, so a run for one fails against the other at its
+/// second message and a relay cannot pick which a peer gets.
+const PURPOSE_ORDINARY: &[u8] = b"ordinary";
+const PURPOSE_PAIR: &[u8] = b"pair";
+
 const FIRST_LEN: usize = DHLEN;
 const SECOND_LEN: usize = DHLEN + (DHLEN + TAGLEN) + TAGLEN;
 const THIRD_LEN: usize = (DHLEN + TAGLEN) + TAGLEN;
@@ -40,6 +45,7 @@ pub(crate) fn field(out: &mut Vec<u8>, bytes: &[u8]) {
 #[derive(Debug, Clone)]
 struct Config {
     identity: Identity,
+    purpose: &'static [u8],
     responders: Option<Admit>,
     initiators: Option<Admit>,
     key_limit: u64,
@@ -88,6 +94,7 @@ impl Noise {
     pub fn new(identity: Identity) -> Self {
         Self(Arc::new(Config {
             identity,
+            purpose: PURPOSE_ORDINARY,
             responders: None,
             initiators: None,
             key_limit: DEFAULT_KEY_LIMIT,
@@ -101,6 +108,7 @@ impl Noise {
     pub(crate) fn admitting_anyone(identity: Identity) -> Self {
         let mut method = Self::new(identity);
         let config = Arc::make_mut(&mut method.0);
+        config.purpose = PURPOSE_PAIR;
         config.responders = Some(Admit::Any);
         config.initiators = Some(Admit::Any);
         method
@@ -311,8 +319,11 @@ impl NoiseHandshake {
     }
 
     fn prologue(&self) -> Vec<u8> {
-        let mut prologue = Vec::with_capacity(16 + PROFILE.len() + self.binding.len());
+        let purpose = self.config.purpose;
+        let mut prologue =
+            Vec::with_capacity(12 + PROFILE.len() + purpose.len() + self.binding.len());
         field(&mut prologue, PROFILE.as_bytes());
+        field(&mut prologue, purpose);
         field(&mut prologue, &self.binding);
         prologue
     }

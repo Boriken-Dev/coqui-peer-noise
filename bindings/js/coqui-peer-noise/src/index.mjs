@@ -531,8 +531,13 @@ function options({keyLimit = DEFAULT_KEY_LIMIT, rekey = true, binding = new Uint
   };
 }
 
-function prologueOf(settings) {
-  return concat(field(encoder.encode(PROFILE)), field(settings.binding));
+// What a run is for, second in the prologue, so a run for one fails against the other at its second
+// message and a relay cannot pick which a peer gets.
+const PURPOSE_ORDINARY = encoder.encode('ordinary');
+const PURPOSE_PAIR = encoder.encode('pair');
+
+function prologueOf(purpose, settings) {
+  return concat(field(encoder.encode(PROFILE)), field(purpose), field(settings.binding));
 }
 
 async function newEphemeral(settings) {
@@ -591,8 +596,8 @@ export async function importIdentity(pkcs8) {
 }
 
 /** The dialling side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
-async function dialling(local, settings, admit, finish) {
-  const handshake = await newHandshake(true, prologueOf(settings), local, await newEphemeral(settings));
+async function dialling(local, purpose, settings, admit, finish) {
+  const handshake = await newHandshake(true, prologueOf(purpose, settings), local, await newEphemeral(settings));
   let state = 'start';
   return Object.freeze({
     /** The first message. */
@@ -626,7 +631,7 @@ async function dialling(local, settings, admit, finish) {
 }
 
 /** The accepting side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
-async function accepting(local, settings, admit, finish) {
+async function accepting(local, purpose, settings, admit, finish) {
   let state = 'first';
   let handshake;
   return Object.freeze({
@@ -636,7 +641,7 @@ async function accepting(local, settings, admit, finish) {
       state = 'failed';
       const message = binaryOf(raw);
       if (message.length !== FIRST_LEN) throw new Error(INVALID);
-      handshake = await newHandshake(false, prologueOf(settings), local, await newEphemeral(settings));
+      handshake = await newHandshake(false, prologueOf(purpose, settings), local, await newEphemeral(settings));
       try {
         await handshake.readMessage(message);
         const reply = await handshake.writeMessage(new Uint8Array());
@@ -680,7 +685,7 @@ export async function createInitiator(identity, expectedPeerId, config) {
   const settings = options(config);
   const local = await checkIdentity(identity);
   if (!PEER_ID.test(expectedPeerId ?? '')) throw new Error('A pinned responder id is required');
-  return dialling(local, settings, async id => {
+  return dialling(local, PURPOSE_ORDINARY, settings, async id => {
     if (id !== expectedPeerId) throw new Error('Responder is not pinned');
   }, async session => ({session}));
 }
@@ -693,7 +698,7 @@ export async function createResponder(identity, {allowClient, ...config} = {}) {
   const settings = options(config);
   const local = await checkIdentity(identity);
   if (typeof allowClient !== 'function') throw new Error('An explicit trust decision is required');
-  return accepting(local, settings, async id => {
+  return accepting(local, PURPOSE_ORDINARY, settings, async id => {
     if (await allowClient(id) !== true) throw new Error('Client is not paired');
   }, async session => ({session}));
 }
@@ -1215,7 +1220,7 @@ export async function createPairingInitiator(identity, {responder, random = OS_R
   const settings = options(config);
   const local = await checkIdentity(identity);
   if (responder !== undefined && !PEER_ID.test(responder)) throw new Error('A pinned responder id is required');
-  return dialling(local, settings, async id => {
+  return dialling(local, PURPOSE_PAIR, settings, async id => {
     if (responder !== undefined && id !== responder) throw new Error('Responder is not pinned');
   }, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, responder !== undefined, random),
@@ -1235,7 +1240,7 @@ export async function createPairingResponder(identity, {firstMessageTimeout = DE
   }
   const settings = options(config);
   const local = await checkIdentity(identity);
-  return accepting(local, settings, async () => {}, async (session, remote) => ({
+  return accepting(local, PURPOSE_PAIR, settings, async () => {}, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM, firstMessageTimeout),
   }));
 }

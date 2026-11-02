@@ -7,7 +7,7 @@ import {readFileSync} from 'node:fs';
 import {webcrypto} from 'node:crypto';
 import {
   createInitiator, createPairingDesk, createPairingInitiator, createPairingResponder, createResponder,
-  generateIdentity, importIdentity, __testing,
+  DEFAULT_KEY_LIMIT, generateIdentity, importIdentity, PROFILE, __testing,
 } from '../src/index.mjs';
 import {keyPairOf, toHex, unhex} from './support.mjs';
 
@@ -167,6 +167,18 @@ test('a pairing session holds a key and is nobody: it has no way to seal or open
     assert.equal(atJoiner[name], undefined, name);
     assert.equal(atResponder[name], undefined, name);
   }
+});
+
+test('a run of one purpose fails at the second message against the other', async () => {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  // A client pinning the bridge, sent to the bridge's pairing endpoint.
+  const client = await createInitiator(joiner, responder.peerId);
+  const pairing = await createPairingResponder(responder);
+  await assert.rejects(async () => client.answer(await pairing.challenge(await client.hello())), /does not decrypt/);
+  // A joiner sent to the ordinary endpoint of a bridge that already trusts it.
+  const stranger = await createPairingInitiator(joiner);
+  const ordinary = await createResponder(responder, {allowClient: async () => true});
+  await assert.rejects(async () => stranger.answer(await ordinary.challenge(await stranger.hello())), /does not decrypt/);
 });
 
 test('a typed PIN pairs two strangers, and the full key is proved afterwards', async () => {
@@ -420,9 +432,9 @@ test('a relay that runs the exchange with each side under its own key has one gu
   assert.equal(desk.shownPin(), null, 'its guess burned the PIN');
 });
 
-// A peer that follows nothing: an ordinary session has `seal` and `open`, and the same handshake on the
-// wire, so it can say anything in the exchange. The transcript and keys here are this file's own, written
-// from PROTOCOL.md apart from what the module does.
+// A peer that follows nothing: the layer beneath the method on the pairing prologue, whose session has
+// `seal` and `open`, so it can say anything in the exchange. The transcript and keys here are this file's
+// own, written from PROTOCOL.md apart from what the module does.
 const asBytes = text => encoder.encode(text);
 const short = bytes => Uint8Array.from([bytes.length, ...bytes]);
 const wide = bytes => Uint8Array.from([0, 0, 0, bytes.length, ...bytes]);
@@ -435,20 +447,36 @@ const NO_SLOT = 0xff;
 const TYPED = 1;
 const refusedWith = byte => `0108${byte.toString(16).padStart(2, '0')}`;
 
+const pairingPrologue = () => plain(...[asBytes(PROFILE), asBytes('pair'), new Uint8Array()].map(wide));
+
+async function unrulyHandshake(initiator, identity) {
+  const pair = await webcrypto.subtle.generateKey('X25519', false, ['deriveBits']);
+  const ephemeral = {privateKey: pair.privateKey, public: new Uint8Array(await webcrypto.subtle.exportKey('raw', pair.publicKey))};
+  const local = {privateKey: identity.privateKey, public: Uint8Array.from(Buffer.from(identity.publicKey, 'base64url').subarray(12))};
+  return __testing.newHandshake(initiator, pairingPrologue(), local, ephemeral);
+}
+
+const unrulySession = async (handshake, initiator) => __testing.createSession(
+  await handshake.split(), initiator, {keyLimit: DEFAULT_KEY_LIMIT, rekey: true},
+);
+
 async function againstResponder(joiner, responder) {
-  const near = await createInitiator(joiner, responder.peerId);
+  const near = await unrulyHandshake(true, joiner);
   const far = await createPairingResponder(responder);
-  const {reply, session} = await near.answer(await far.challenge(await near.hello()));
-  const {pairing} = await far.accept(reply);
-  return {session, pairing};
+  const payload = new Uint8Array();
+  await near.readMessage(await far.challenge(await near.writeMessage(payload)));
+  const {pairing} = await far.accept(await near.writeMessage(payload));
+  return {session: await unrulySession(near, true), pairing};
 }
 
 async function againstJoiner(joiner, responder) {
   const near = await createPairingInitiator(joiner);
-  const far = await createResponder(responder, {allowClient: async () => true});
-  const {reply, pairing} = await near.answer(await far.challenge(await near.hello()));
-  const {session} = await far.accept(reply);
-  return {session, pairing};
+  const far = await unrulyHandshake(false, responder);
+  const payload = new Uint8Array();
+  await far.readMessage(await near.hello());
+  const {reply, pairing} = await near.answer(await far.writeMessage(payload));
+  await far.readMessage(reply);
+  return {session: await unrulySession(far, false), pairing};
 }
 
 const talking = (session, end) => ({

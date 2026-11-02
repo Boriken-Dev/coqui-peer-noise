@@ -37,7 +37,7 @@ reading the sources named here and argued in this document, with no proof and no
 | Piece | Whose | State |
 | --- | --- | --- |
 | Pattern XX with X25519, AES-256-GCM and SHA-256 | Noise specification | Analysed, as far as the abstracts above say |
-| [Prologue](#handshake): two length-prefixed fields | Ours; section 6 allows a prologue | Its form not analysed |
+| [Prologue](#handshake): three length-prefixed fields | Ours; section 6 allows a prologue | Its form not analysed |
 | Refusing a small-order key, a second encoding, a payload, another length | Ours; stricter than the specification | Argued under [Handshake](#handshake) and [Identity](#identity) |
 | A key's id: SHA-256 of its RFC 8410 SPKI | Ours | Argued under [Identity](#identity) |
 | [Records](#records): a type byte inside the AEAD, parts, one shape per message | Ours | Not analysed |
@@ -52,7 +52,8 @@ reading the sources named here and argued in this document, with no proof and no
 | [The JavaScript SPAKE2](#pairing): Edwards25519 over `BigInt`, written here to match that crate | Ours | **Written from that crate's source, not constant-time**, checked only by the answers listed there |
 
 The method is chosen per endpoint and never negotiated on one, so nothing on the path can talk it down.
-A peer running another method fails the handshake.
+A peer running another method fails the handshake, and so does a run for another purpose: pairing and ordinary runs differ
+in the prologue, so a relay cannot pick which one a peer gets. Section 14's "Rollback" names what that closes.
 
 ### Why these functions
 
@@ -163,9 +164,9 @@ anything else is done with it. Payloads are always empty, and a message is refus
 | 2 | Responder | `e, ee, s, es` | 96: 32, 32 + 16, 16 |
 | 3 | Initiator | `s, se` | 64: 32 + 16, 16 |
 
-**The prologue** is two fields, each four big-endian length bytes and then its bytes: the profile above, and
-the [outer binding](#the-outer-binding), empty unless both ends set one. Section 6: a difference fails the
-handshake with a decryption error. It is never sent.
+**The prologue** is three fields, each four big-endian length bytes and then its bytes: the profile above, the purpose,
+`ordinary` or `pair`, and the [outer binding](#the-outer-binding), empty unless both ends set one. Section 6: a difference
+fails the handshake with a decryption error at the second message. It is never sent.
 
 **Order of checks.** A public key read is refused first if it is not in its one encoding. A DH output of all
 zeros is refused. Section 12.1 allows that and discourages it, as adding complexity and not improving security,
@@ -325,9 +326,9 @@ No other proxy, nginx version or operating system has been run, and neither has 
 
 `coqui_peer::pair` runs on a session of its own, bound to the session and not to any TLS beneath it. A joiner is a
 stranger, so the responder admits any proved key for this. Both languages enforce what follows from that by what they
-offer: such a handshake ends in a pairing session (`PairingSession` in Rust, `pairing` in JavaScript), which holds the
-proved key and runs one exchange, and has no way to carry an application message. A session that can carry one exists
-only with a peer a pin or a trust store admitted. Each message is one record. Once paired, both sides close and reconnect
+offer: such a handshake, whose prologue says `pair`, ends in a pairing session (`PairingSession` in Rust, `pairing` in
+JavaScript), which holds the proved key and runs one exchange, and has no way to carry an application message. A session
+that can carry one exists only with a peer a pin or a trust store admitted, on a prologue that says `ordinary`. Each message is one record. Once paired, both sides close and reconnect
 under the ordinary method, and the full key is what the handshake proves.
 
 The `Channel` is `local` this side's key, `remote` the key the handshake proved, which no caller names, `binding` a 32-byte

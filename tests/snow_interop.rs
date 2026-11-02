@@ -11,7 +11,7 @@ const LEN: usize = 70_000;
 
 fn prologue() -> Vec<u8> {
     let mut out = Vec::new();
-    for field in [PROFILE.as_bytes(), b""] {
+    for field in [PROFILE.as_bytes(), b"ordinary", b""] {
         out.extend_from_slice(&u32::try_from(field.len()).unwrap().to_be_bytes());
         out.extend_from_slice(field);
     }
