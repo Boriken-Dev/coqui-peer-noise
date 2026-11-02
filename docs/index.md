@@ -5,7 +5,7 @@ session, in a browser or natively, through anything that carries their messages.
 [coqui-peer](https://boriken-dev.github.io/coqui-peer/), which holds the peer id, the trust store and the sans-IO
 handshake trait.
 
-!!! warning "Unreleased, not independently reviewed"
+!!! warning "Unreleased, with one AI-agent review"
     The wire and the API may change at any commit. There are no releases for now: depend on a git
     revision.
 

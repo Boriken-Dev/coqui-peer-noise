@@ -8,7 +8,7 @@ proxy, because it uses nothing of the connection beneath it. A proxy that also s
 its key, so a hosted page gets no protection from that proxy; an extension, a packaged app, or a page whose code and pinned id
 come from elsewhere does.
 
-Not independently reviewed. `AGENTS.md` here is the API, and
+One independent review, by another AI agent (neither third-party nor formal). `AGENTS.md` here is the API, and
 [PROTOCOL.md](https://github.com/Boriken-Dev/coqui-peer-noise/blob/main/PROTOCOL.md) the wire and what a relay can and
 cannot do.
 

@@ -34,7 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `tests/vectors/pairing.json` and `tests/vectors/spake2.json`.
 - `tools/proxy-run`: a real nginx between a real browser and the Rust side, by hand and not in CI.
 
+- `record_length` and `recordLength`: the length of the record a message becomes. `supported()` in the JavaScript module: whether
+  the runtime has what the method needs, for the downgrade rule in `PROTOCOL.md`.
+
 ### Changed
 
+- A receiver refuses a peer only above the larger of its own key limit and the default, so a lower limit is a side's own
+  sending only. A record whose last part is empty after a part is refused, in both languages.
+- A pairing responder ends the exchange as expired after more than three reads in a row that time out with time left and no
+  record between, instead of reading again at once.
+- The JavaScript module copies a `Buffer` binding instead of viewing it.
 - The wire: the prologue has a third field, `ordinary` or `pair`. Nothing is released, so the version stays.
 - A JavaScript scalar multiplication adds `8L` to its scalar, which changes no result.
