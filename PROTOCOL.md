@@ -294,9 +294,9 @@ a certificate, or one a user was lured to. The method needs no cooperation from 
 messages beside the records, trusting the handshake, hands the whole connection to the relay: it forwards the
 three messages, both ends succeed, and it then reads and writes as it likes.
 
-It does not protect against a party that serves the page. A browser runs the code its origin sends, so if the
-reverse proxy also serves the page's JavaScript, it can replace that code. Ship the module in the application
-(an extension, a packaged app), or serve it from where the carrier cannot change it.
+**Where this method cannot protect.** A proxy that also serves the page can replace the module, or call the page's
+non-extractable key from a script of its own, so a hosted page gets no protection from that proxy. An extension, a packaged app,
+or a page whose code and pinned id come from elsewhere does.
 
 ### The outer binding
 

@@ -157,7 +157,10 @@ over after one, and a later call says `Unexpected ...`. What is refused is in `P
 ## Gotchas
 
 - A non-extractable key cannot be copied out, but any script in the origin can use it.
-- A proxy that serves the page can replace this module. Ship it with the application.
+- A proxy that also serves the page can replace this module or use its non-extractable key, so a hosted page gets no protection
+  from that proxy. An extension, a packaged app, or a page whose code and pinned id come from elsewhere does.
+- One private key can prove 8 ids, as `PROTOCOL.md` says. Each is admitted only on its own, so no trust decision turns on it, but
+  a count of ids is not a count of private keys.
 - The static key cannot sign, and it is the id: a new key is a new peer.
 - A responder's static key is sent to whoever starts a handshake; only an initiator's is kept from strangers.
 - Each first message costs a responder two DH operations and an ephemeral key for free: bound connections and time in

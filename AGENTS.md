@@ -256,6 +256,9 @@ quotes input, a key or a path. A handshake is over after an error: nothing queue
 - A transport ending says nothing by itself: `verify_end` does. A peer that never calls `close` looks cut.
 - A static key cannot sign, and it is the id: replacing it is a rotation through the store, and a key of another
   method is another id.
+- One private key can prove 8 ids, through the points of order 8, as `PROTOCOL.md` says. Each is admitted only on its own pin or
+  acceptance, so no trust decision turns on it, but a count of ids is not a count of private keys.
+- A proxy that also serves the page can replace the module or use its key: `PROTOCOL.md`, "Where this method cannot protect".
 - A responder's static key is sent to whoever starts a handshake; only an initiator's is kept from strangers.
 - Each first message costs a responder two DH operations and an ephemeral key for free: bound connections and time
   in the host.
