@@ -25,6 +25,15 @@ export async function createResponder(identity, {allowClient, ...options});
 // -> {async challenge(raw) -> Uint8Array, async accept(raw) -> {peerId, session}}
 // allowClient: async (peerId) -> exactly true to admit; runs after the peer proved its key
 
+// A stranger's handshake, which only pairs; see "Pairing" below.
+export async function createPairingInitiator(identity, {responder, random, ...options});
+// -> {async hello(), async answer(raw) -> {reply, peerId, pairing}}
+export async function createPairingResponder(identity, options);
+// -> {async challenge(raw), async accept(raw) -> {peerId, pairing}}
+export function createPairingDesk({pinAlphabet, pinLength, pinTtl, pinAttempts, now, random});
+// -> frozen {showPin() -> {pin, expires}, shownPin() -> {pin, expires} | null, clearPin()}
+export const PAIR_EXPORT_LABEL;    // 'EXPORTER-coqui-pair'
+
 // session (frozen):
 //   id                          Uint8Array(32), Noise's handshake hash; both ends agree; not secret
 //   async seal(bytes | string)  -> Uint8Array record; any length; send whole, in the order of the calls
@@ -83,6 +92,49 @@ close the connection. When done, `session.destroy()`. The module drops the ephem
 ends and wipes the key bytes it holds; a `CryptoKey`'s memory is cleared when the engine collects it. Noise's HKDF needs
 each chaining key as bytes, so those exist in JavaScript memory during a handshake.
 
+## Pairing
+
+A stranger's handshake ends in a `pairing`, and never in a session: it has no `seal` or `open`, so what serves the application
+cannot be reached by proving just any key. Once paired, both reconnect with `createInitiator` and `createResponder`, and the
+full key is what the handshake proves.
+
+```js
+// pairing (frozen): id, peer: {method, label, publicKey}, verified
+//   async join(pin, transport)                 -> {peerId, peer, mode: 'pin'}; the joiner, with a PIN a person typed
+//   async respond(desk, transport, {accept})   -> {peerId, peer, mode: 'pin'}; accept(peerId, peer) keeps the joiner's key
+// transport: {async send(bytes), async recv() -> Uint8Array, or null when the connection ended}
+```
+
+```js
+const near = await createPairingInitiator(identity);
+socket.send(await near.hello());
+const {reply, pairing} = await near.answer(await nextMessage());
+socket.send(reply);
+const {peerId} = await pairing.join(typedPin, {send: async bytes => socket.send(bytes), recv: nextMessage});
+// A new connection, pinned from now on:
+const initiator = await createInitiator(identity, peerId);
+```
+
+A session runs one exchange, sealed, and its keys go when it ends, however it ends. Close the connection then, or the other
+side waits for its transport. A joiner has no deadline of its own: bound it by ending the transport, which `recv` reports as
+`null`. **A failure with a `refusal` property is the protocol saying no**: `wrong-code`, `expired`,
+`exhausted`, `throttled`, `denied` or `disabled`. With the default of one attempt, a wrong PIN burns it: `desk.showPin()` again
+and start over on a new connection. `accept` runs only after the PIN confirmed, and the joiner hears it worked only after
+`accept` returned.
+
+- `responder` (`createPairingInitiator`): the id the handshake must prove; `verified` is then `true`. A PIN needs none: it
+  authenticates both keys. Without it the initiator accepts any proved key, which is all a `pairing` can do.
+- Desk options, each with a default and no floor: `pinAlphabet` `'0123456789'`, `pinLength` `6`, `pinTtl` `600000` (ms, also how
+  long an exchange may run), `pinAttempts` `1`, `now` `Date.now`. Options with no meaning (an empty alphabet, zero attempts) throw.
+  More attempts or fewer codes raise a guess's chance in proportion.
+- `random` (`createPairingInitiator`, `createPairingDesk`): a function of a length, for test vectors only.
+
+The responder offers a PIN typed at the joiner, and refuses every other mode as `disabled`; the invitation and device flow are
+Rust's. The desk counts attempts and time. **Limiting pending exchanges, and exchanges per source, is the host's.**
+
+**The arithmetic is `BigInt`, written here, and not constant-time**, because WebCrypto has no group operation.
+`PROTOCOL.md`, "What the JavaScript side leaves open", says what that means.
+
 ## Errors
 
 Every failure is a thrown `Error` whose message quotes nothing the peer sent; a handshake object is
@@ -97,3 +149,4 @@ over after one, and a later call says `Unexpected ...`. What is refused is in `P
 - Each first message costs a responder two DH operations and an ephemeral key for free: bound connections and time in
   the host.
 - A record's length is visible: there is no padding.
+- A stranger can burn a shown PIN by trying it. Bound connections in the host.

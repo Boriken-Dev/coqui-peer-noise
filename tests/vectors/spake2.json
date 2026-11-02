@@ -1,0 +1,12 @@
+{
+  "description": "Copied from `test_asymmetric` and `test_password_to_scalar` of the `spake2` crate 0.4.0, src/lib.rs. Never regenerated: this is that crate's answer and not ours. Scalars are the crate's decimal, read as whole numbers.",
+  "password": "password",
+  "idA": "idA",
+  "idB": "idB",
+  "passwordScalar": "3515301705789368674385125653994241092664323519848410154015274772661223168839",
+  "scalarA": "2611694063369306139794446498317402240796898290761098242657700742213257926693",
+  "scalarB": "7002393159576182977806091886122272758628412261510164356026361256515836884383",
+  "messageA": "416fc960df73c9cf8ed7198b0c9534e2e96a5984bfc5edc023fd24dacf371f2af9",
+  "messageB": "42354e97b88406922b1df4bea1d7870f17aed3dba7c720b313edae315b00959309",
+  "key": "712295de7219c675ddd31942184aa26e0a957cf216bc230d165b215047b520c1"
+}

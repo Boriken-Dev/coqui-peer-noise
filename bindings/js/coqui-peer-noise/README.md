@@ -23,7 +23,11 @@ socket.send(await session.seal('every later message goes through the session'));
 socket.send(await session.close());  // the last record; a stream cut before it is reported
 ```
 
-`npm test` runs the tests, including the Rust example in both roles and a real browser, which skip with
+A stranger's key is paired by a PIN a person types, sealed in a session that carries nothing else:
+`createPairingInitiator`, `createPairingResponder` and `createPairingDesk`, the same bytes as Rust. The arithmetic behind it
+is `BigInt` and not constant-time; `AGENTS.md` and `PROTOCOL.md` say what that leaves open.
+
+`npm test` runs the tests, including the Rust examples in both roles and a real browser, which skip with
 a message where cargo or a browser is absent.
 
 MPL-2.0.

@@ -589,15 +589,8 @@ export async function importIdentity(pkcs8) {
   return identityOf(publicKey, privateKey, await peerIdOf(publicKey));
 }
 
-/**
- * Starts a handshake as the side that dials, trusting only `expectedPeerId`.
- * Options: `keyLimit`; `rekey`; `binding`, bytes of an outer channel both ends really read (a TLS
- * exporter where each ends that TLS itself, never through a reverse proxy); `ephemeral` replaces the
- * generator, for test vectors only.
- */
-export async function createInitiator(identity, expectedPeerId, config) {
-  const local = await checkIdentity(identity);
-  if (!PEER_ID.test(expectedPeerId ?? '')) throw new Error('A pinned responder id is required');
+/** The dialling side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
+async function dialling(local, config, admit, finish) {
   const settings = options(config);
   const handshake = await newHandshake(true, prologueOf(settings), local, await newEphemeral(settings));
   let state = 'start';
@@ -617,13 +610,13 @@ export async function createInitiator(identity, expectedPeerId, config) {
         if (message.length !== SECOND_LEN) throw new Error(INVALID);
         await handshake.readMessage(message);
         if (isOwnKey(handshake, local)) throw new Error(INVALID);
-        if (await peerIdOf(handshake.remoteStatic) !== expectedPeerId) {
-          throw new Error('Responder is not pinned');
-        }
+        const id = await peerIdOf(handshake.remoteStatic);
+        await admit(id);
         const reply = await handshake.writeMessage(new Uint8Array());
+        const remote = handshake.remoteStatic;
         const session = await createSession(await handshake.split(), true, settings);
         state = 'done';
-        return {reply, peerId: expectedPeerId, session};
+        return {reply, peerId: id, ...await finish(session, remote)};
       } catch (error) {
         handshake.wipe();
         throw error;
@@ -632,13 +625,8 @@ export async function createInitiator(identity, expectedPeerId, config) {
   });
 }
 
-/**
- * Starts a handshake as the side that accepts. `allowClient(peerId)` runs after the peer proved its
- * key and must resolve to exactly `true` to admit it. Other options as for `createInitiator`.
- */
-export async function createResponder(identity, {allowClient, ...config} = {}) {
-  const local = await checkIdentity(identity);
-  if (typeof allowClient !== 'function') throw new Error('An explicit trust decision is required');
+/** The accepting side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
+async function accepting(local, config, admit, finish) {
   const settings = options(config);
   let state = 'first';
   let handshake;
@@ -670,16 +658,569 @@ export async function createResponder(identity, {allowClient, ...config} = {}) {
         await handshake.readMessage(message);
         if (isOwnKey(handshake, local)) throw new Error(INVALID);
         const id = await peerIdOf(handshake.remoteStatic);
-        if (await allowClient(id) !== true) throw new Error('Client is not paired');
+        await admit(id);
+        const remote = handshake.remoteStatic;
         const session = await createSession(await handshake.split(), false, settings);
         state = 'done';
-        return {peerId: id, session};
+        return {peerId: id, ...await finish(session, remote)};
       } catch (error) {
         handshake.wipe();
         throw error;
       }
     },
   });
+}
+
+/**
+ * Starts a handshake as the side that dials, trusting only `expectedPeerId`.
+ * Options: `keyLimit`; `rekey`; `binding`, bytes of an outer channel both ends really read (a TLS
+ * exporter where each ends that TLS itself, never through a reverse proxy); `ephemeral` replaces the
+ * generator, for test vectors only.
+ */
+export async function createInitiator(identity, expectedPeerId, config) {
+  const local = await checkIdentity(identity);
+  if (!PEER_ID.test(expectedPeerId ?? '')) throw new Error('A pinned responder id is required');
+  return dialling(local, config, async id => {
+    if (id !== expectedPeerId) throw new Error('Responder is not pinned');
+  }, async session => ({session}));
+}
+
+/**
+ * Starts a handshake as the side that accepts. `allowClient(peerId)` runs after the peer proved its
+ * key and must resolve to exactly `true` to admit it. Other options as for `createInitiator`.
+ */
+export async function createResponder(identity, {allowClient, ...config} = {}) {
+  const local = await checkIdentity(identity);
+  if (typeof allowClient !== 'function') throw new Error('An explicit trust decision is required');
+  return accepting(local, config, async id => {
+    if (await allowClient(id) !== true) throw new Error('Client is not paired');
+  }, async session => ({session}));
+}
+
+// Edwards25519, for the PIN exchange's SPAKE2. WebCrypto has no group operation, so this is BigInt
+// arithmetic: it runs one fixed sequence of point operations per scalar, and BigInt itself promises
+// nothing about time. PROTOCOL.md says what that leaves open.
+const P = 2n ** 255n - 19n;
+const L = 2n ** 252n + 27742317777372353535851937790883648493n;
+const CURVE_D = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n;
+const SQRT_M1 = 0x2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0n;
+const BASE_X = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an;
+const BASE_Y = 0x6666666666666666666666666666666666666666666666666666666666666658n;
+const SCALAR_BITS = 256;
+
+const fe = value => {
+  const reduced = value % P;
+  return reduced < 0n ? reduced + P : reduced;
+};
+
+function powP(base, exponent) {
+  let result = 1n;
+  let square = fe(base);
+  for (let rest = exponent; rest > 0n; rest >>= 1n) {
+    if (rest & 1n) result = fe(result * square);
+    square = fe(square * square);
+  }
+  return result;
+}
+
+const pointOf = (x, y) => ({x, y, z: 1n, t: fe(x * y)});
+const IDENTITY = pointOf(0n, 1n);
+const BASE = pointOf(BASE_X, BASE_Y);
+
+/** RFC 8032's unified addition for a = -1, which is complete: it holds for every pair of points. */
+function pointAdd(a, b) {
+  const minus = fe((a.y - a.x) * (b.y - b.x));
+  const plus = fe((a.y + a.x) * (b.y + b.x));
+  const c = fe(2n * CURVE_D * a.t * b.t);
+  const d = fe(2n * a.z * b.z);
+  const e = plus - minus;
+  const f = d - c;
+  const g = d + c;
+  const h = plus + minus;
+  return {x: fe(e * f), y: fe(g * h), t: fe(e * h), z: fe(f * g)};
+}
+
+/** A Montgomery ladder: the same additions whatever the scalar's bits, which index the pair. */
+function pointMul(point, scalar) {
+  const pair = [IDENTITY, point];
+  for (let index = SCALAR_BITS - 1; index >= 0; index -= 1) {
+    const bit = Number((scalar >> BigInt(index)) & 1n);
+    pair[1 - bit] = pointAdd(pair[0], pair[1]);
+    pair[bit] = pointAdd(pair[bit], pair[bit]);
+  }
+  return pair[0];
+}
+
+function littleEndian(bytes) {
+  let value = 0n;
+  for (let index = bytes.length - 1; index >= 0; index -= 1) value = (value << 8n) | BigInt(bytes[index]);
+  return value;
+}
+
+function compress(point) {
+  const inverse = powP(point.z, P - 2n);
+  const x = fe(point.x * inverse);
+  let y = fe(point.y * inverse);
+  const out = new Uint8Array(DHLEN);
+  for (let index = 0; index < DHLEN; index += 1) {
+    out[index] = Number(y & 0xffn);
+    y >>= 8n;
+  }
+  out[DHLEN - 1] |= Number(x & 1n) << 7;
+  return out;
+}
+
+/** RFC 8032 section 5.1.3, with its one encoding per point: null for anything else. */
+function decompress(bytes) {
+  if (bytes.length !== DHLEN) return null;
+  const sign = bytes[DHLEN - 1] >> 7;
+  const copy = bytes.slice();
+  copy[DHLEN - 1] &= 0x7f;
+  const y = littleEndian(copy);
+  if (y >= P) return null;
+  const u = fe(y * y - 1n);
+  const v = fe(CURVE_D * y * y + 1n);
+  const v3 = fe(v * v * v);
+  let x = fe(u * v3 * powP(u * v3 * v3 * v, (P - 5n) / 8n));
+  const check = fe(v * x * x);
+  if (check === fe(-u)) x = fe(x * SQRT_M1);
+  else if (check !== u) return null;
+  if (x === 0n && sign === 1) return null;
+  if (Number(x & 1n) !== sign) x = fe(-x);
+  return pointOf(x, y);
+}
+
+function hexBytes(text) {
+  return Uint8Array.from(text.match(/../g), pair => parseInt(pair, 16));
+}
+
+// SPAKE2 as the `spake2` crate 0.4 has it, which coqui_peer::pair uses: its constants, its reduction of
+// the password, its side bytes and its key. Each of these is that crate's and not a specification's.
+const SPAKE_M = decompress(hexBytes('15cfd18e385952982b6a8f8c7854963b58e34388c8e6dae891db756481a02312'));
+const SPAKE_N = decompress(hexBytes('f04f2e7eb734b2a8f8b472eaf9c3c632576ac64aea650b496a8a20ff00e583c3'));
+const SIDE_A = 0x41;
+const SIDE_B = 0x42;
+const SPAKE_MESSAGE_LEN = 1 + DHLEN;
+const OS_RANDOM = length => globalThis.crypto.getRandomValues(new Uint8Array(length));
+
+async function hkdf(ikm, info, length) {
+  const key = await subtle().importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+  return new Uint8Array(await subtle().deriveBits(
+    {name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(), info}, key, length * 8,
+  ));
+}
+
+async function passwordScalar(password) {
+  const okm = await hkdf(password, encoder.encode('SPAKE2 pw'), 48);
+  const value = littleEndian(okm.slice().reverse()) % L;
+  okm.fill(0);
+  return value;
+}
+
+/** `random` gives the 64 bytes of the blinding scalar. Returns the state and the message to send. */
+async function spakeStart(joiner, password, idA, idB, random) {
+  const draw = random(64);
+  const scalar = littleEndian(draw) % L;
+  draw.fill(0);
+  return spakeStartWith(joiner, password, idA, idB, scalar);
+}
+
+async function spakeStartWith(joiner, password, idA, idB, scalar) {
+  const pw = await passwordScalar(password);
+  const element = compress(pointAdd(pointMul(BASE, scalar), pointMul(joiner ? SPAKE_M : SPAKE_N, pw)));
+  return {
+    state: {joiner, password, idA, idB, scalar, pw, element},
+    message: concat(Uint8Array.of(joiner ? SIDE_A : SIDE_B), element),
+  };
+}
+
+/** The shared key for the other side's message, or null when that message is not one. */
+async function spakeFinish(state, other) {
+  if (other.length !== SPAKE_MESSAGE_LEN || other[0] !== (state.joiner ? SIDE_B : SIDE_A)) return null;
+  const received = other.subarray(1);
+  const element = decompress(received);
+  if (!element) return null;
+  const unblind = pointMul(state.joiner ? SPAKE_N : SPAKE_M, (L - state.pw) % L);
+  const key = compress(pointMul(pointAdd(element, unblind), state.scalar));
+  const [first, second] = state.joiner ? [state.element, received] : [received, state.element];
+  const transcript = concat(
+    await sha256(state.password), await sha256(state.idA), await sha256(state.idB), first, second, key,
+  );
+  key.fill(0);
+  const shared = await sha256(transcript);
+  transcript.fill(0);
+  return shared;
+}
+
+// coqui_peer::pair's messages, which the Rust side runs through coqui-peer: PROTOCOL.md's "Pairing".
+const PAIR_VERSION = 1;
+const PAIR_HELLO = 1;
+const PAIR_READY = 2;
+const PAIR_PAKE = 3;
+const PAIR_REPLY = 4;
+const PAIR_CONFIRM = 5;
+const PAIR_DONE = 7;
+const PAIR_REFUSED = 8;
+const PAIR_MODE_PIN_TYPED = 1;
+const PAIR_MODE_DEVICE = 3;
+const PAIR_NO_SLOT = 0xff;
+const PAIR_TAG_LEN = 32;
+export const PAIR_EXPORT_LABEL = 'EXPORTER-coqui-pair';
+const KEY_LABEL = 'PUBLIC KEY';
+const REFUSALS = Object.freeze([null, 'wrong-code', 'expired', 'exhausted', 'throttled', 'denied', 'disabled']);
+const refusalByte = name => REFUSALS.indexOf(name);
+const EXPIRED = Symbol('expired');
+const OUT_OF_PLACE = 'A pairing message is malformed or unexpected';
+
+function refusal(name) {
+  return Object.assign(new Error(`The pairing was refused: ${name}`), {refusal: name});
+}
+
+function short(bytes) {
+  return concat(Uint8Array.of(bytes.length), bytes);
+}
+
+/** A KeyMaterial: the method, the label, then the bytes. */
+function keyField(publicKey) {
+  return concat(short(encoder.encode(METHOD)), short(encoder.encode(KEY_LABEL)), field(spkiOf(publicKey)));
+}
+
+/** A message's fields in order; every shortfall is the one refusal, and `end` refuses what is left over. */
+function pairReader(message) {
+  let rest = message;
+  const take = count => {
+    if (rest.length < count) throw new Error(OUT_OF_PLACE);
+    const taken = rest.subarray(0, count);
+    rest = rest.subarray(count);
+    return taken;
+  };
+  const reader = {
+    byte: () => take(1)[0],
+    short: () => take(take(1)[0]).slice(),
+    tag: () => take(PAIR_TAG_LEN).slice(),
+    /** The next KeyMaterial, which must be `publicKey`'s to the byte. */
+    key(publicKey) {
+      const expected = keyField(publicKey);
+      const found = take(expected.length);
+      if (!found.every((byte, index) => byte === expected[index])) throw new Error(OUT_OF_PLACE);
+    },
+    end() {
+      if (rest.length !== 0) throw new Error(OUT_OF_PLACE);
+    },
+  };
+  if (reader.byte() !== PAIR_VERSION) throw new Error(OUT_OF_PLACE);
+  reader.kind = reader.byte();
+  if (reader.kind === PAIR_REFUSED) {
+    const name = REFUSALS[reader.byte()];
+    reader.end();
+    if (!name) throw new Error(OUT_OF_PLACE);
+    throw refusal(name);
+  }
+  return reader;
+}
+
+function pairMessage(kind, ...fields) {
+  return concat(Uint8Array.of(PAIR_VERSION, kind), ...fields);
+}
+
+/** What both PIN confirmations cover, as coqui_peer::pair's `transcript`. */
+function pinTranscript(joiner, responder, joinerMessage, responderMessage, binding) {
+  return concat(
+    encoder.encode('coqui-pair pin'), keyField(joiner), keyField(responder), Uint8Array.of(PAIR_NO_SLOT),
+    short(joinerMessage), short(responderMessage), Uint8Array.of(1), field(binding),
+  );
+}
+
+async function confirmationKeys(shared) {
+  const keys = {
+    joiner: await hkdf(shared, encoder.encode('coqui-pair joiner confirmation'), HASHLEN),
+    responder: await hkdf(shared, encoder.encode('coqui-pair responder confirmation'), HASHLEN),
+  };
+  shared.fill(0);
+  return keys;
+}
+
+async function macKey(bytes) {
+  const key = await subtle().importKey('raw', bytes, HMAC, false, ['sign', 'verify']);
+  bytes.fill(0);
+  return key;
+}
+
+const macOf = async (key, data) => new Uint8Array(await subtle().sign('HMAC', key, data));
+// WebCrypto's `verify` is the comparison made for a MAC, not one that stops at the first difference.
+const macVerifies = (key, tag, data) => subtle().verify('HMAC', key, tag, data);
+
+function checkTransport(transport) {
+  if (typeof transport?.send !== 'function' || typeof transport?.recv !== 'function') {
+    throw new TypeError('A transport with send(bytes) and recv() is required');
+  }
+}
+
+/** A transport's next record; its end, before the exchange's, is what a cut looks like. */
+async function nextMessage(session, transport) {
+  const record = await transport.recv();
+  if (record === null || record === undefined) throw new Error('The stream was truncated: the exchange did not finish');
+  const message = await session.open(record);
+  if (message === null) throw new Error('The stream was truncated: the peer closed before the exchange finished');
+  return message;
+}
+
+const pairDesks = new WeakMap();
+
+/**
+ * Where a responder keeps the PIN it shows. Options, each with a default and no floor:
+ * `pinAlphabet` ('0123456789'), `pinLength` (6), `pinTtl` (600000 ms, also how long an exchange lasts),
+ * `pinAttempts` (1: how many runs may try a PIN; a run counts once past its first PAKE message), `now`
+ * (Date.now) and `random` (the operating system's; replacing it is for test vectors only).
+ */
+export function createPairingDesk({
+  pinAlphabet = '0123456789', pinLength = 6, pinTtl = 600_000, pinAttempts = 1, now = Date.now, random = OS_RANDOM,
+} = {}) {
+  const alphabet = typeof pinAlphabet === 'string' ? [...pinAlphabet] : [];
+  if (alphabet.length === 0 || new Set(alphabet).size !== alphabet.length ||
+      !Number.isSafeInteger(pinLength) || pinLength < 1 || !(pinTtl > 0) ||
+      !Number.isSafeInteger(pinAttempts) || pinAttempts < 1 ||
+      typeof now !== 'function' || typeof random !== 'function') {
+    throw new Error('A pairing desk option has no meaning');
+  }
+  let shown = null;
+  let left = 0;
+  let gone = 'exhausted';
+  const sweep = () => {
+    if (shown && now() >= shown.expires) {
+      shown = null;
+      gone = 'expired';
+    }
+  };
+  // Rejection over a 32-bit word, as coqui_peer's desk draws: every character equally likely.
+  const below = bound => {
+    const span = 2 ** 32;
+    const limit = span - span % bound;
+    for (;;) {
+      const drawn = random(4);
+      const word = new DataView(drawn.buffer, drawn.byteOffset, 4).getUint32(0, false);
+      if (word < limit) return word % bound;
+    }
+  };
+  const desk = Object.freeze({
+    /** Shows a new PIN, replacing any before it, with its attempts. */
+    showPin() {
+      let pin = '';
+      for (let index = 0; index < pinLength; index += 1) pin += alphabet[below(alphabet.length)];
+      shown = {pin, expires: now() + pinTtl};
+      left = pinAttempts;
+      return Object.freeze({...shown});
+    },
+    /** The PIN shown now, while it lasts and has attempts left, or null. */
+    shownPin() {
+      sweep();
+      return shown && Object.freeze({...shown});
+    },
+    clearPin() {
+      shown = null;
+      gone = 'exhausted';
+    },
+  });
+  pairDesks.set(desk, {
+    now, random, pinTtl,
+    /** The refusal to give now, or null when a PIN is shown. */
+    ready() {
+      sweep();
+      return shown ? null : gone;
+    },
+    /** One attempt at the shown PIN, burning it after the last; the refusal when there is none. */
+    take() {
+      sweep();
+      if (!shown) return {refused: gone};
+      const {pin} = shown;
+      left -= 1;
+      if (left === 0) {
+        shown = null;
+        gone = 'exhausted';
+      }
+      return {pin};
+    },
+  });
+  return desk;
+}
+
+/** What a pairing handshake ends in: a proved key that is nobody yet. It runs one exchange and carries nothing else. */
+function pairingSessionOf(session, local, remote, verified, random) {
+  let used = false;
+  const once = () => {
+    if (used) throw new Error('A pairing session runs one exchange');
+    used = true;
+  };
+  const refuse = async (transport, name) => {
+    try {
+      await transport.send(await session.seal(pairMessage(PAIR_REFUSED, Uint8Array.of(refusalByte(name)))));
+    } catch {
+      // The other side is told why as far as the transport still takes it.
+    }
+    return refusal(name);
+  };
+  const closing = async transport => {
+    try {
+      await transport.send(await session.close());
+    } catch {
+      // It already has what it needs: its last message came before this.
+    }
+  };
+  const peer = Object.freeze({method: METHOD, label: KEY_LABEL, publicKey: b64(spkiOf(remote))});
+  return Object.freeze({
+    id: session.id,
+    peer,
+    verified,
+    /**
+     * Joins with the PIN a person typed, each message sealed. Resolves to the responder's
+     * `{peerId, peer, mode: 'pin'}`, to pin from now on; rejects with an `Error` whose `refusal` says why
+     * when either side refused.
+     */
+    async join(pin, transport) {
+      once();
+      try {
+        if (typeof pin !== 'string' || pin.length === 0) throw new TypeError('A PIN is required');
+        checkTransport(transport);
+        const [idA, idB] = [await peerIdOf(local.public), await peerIdOf(remote)];
+        const binding = await session.export(PAIR_EXPORT_LABEL, HASHLEN);
+        const password = encoder.encode(pin);
+        await transport.send(await session.seal(
+          pairMessage(PAIR_HELLO, Uint8Array.of(PAIR_MODE_PIN_TYPED), keyField(local.public)),
+        ));
+        const ready = pairReader(await nextMessage(session, transport));
+        if (ready.kind !== PAIR_READY) throw new Error(OUT_OF_PLACE);
+        ready.key(remote);
+        if (ready.byte() !== PAIR_NO_SLOT) throw new Error(OUT_OF_PLACE);
+        ready.end();
+        const {state, message} = await spakeStart(true, password, encoder.encode(idA), encoder.encode(idB), random);
+        await transport.send(await session.seal(pairMessage(PAIR_PAKE, short(message))));
+        const reply = pairReader(await nextMessage(session, transport));
+        if (reply.kind !== PAIR_REPLY) throw new Error(OUT_OF_PLACE);
+        const received = reply.short();
+        const tag = reply.tag();
+        reply.end();
+        const shared = await spakeFinish(state, received);
+        password.fill(0);
+        if (!shared) throw await refuse(transport, 'wrong-code');
+        const keys = await confirmationKeys(shared);
+        const transcript = pinTranscript(local.public, remote, message, received, binding);
+        const joinerKey = await macKey(keys.joiner);
+        const responderKey = await macKey(keys.responder);
+        if (!await macVerifies(responderKey, tag, transcript)) throw await refuse(transport, 'wrong-code');
+        await transport.send(await session.seal(pairMessage(PAIR_CONFIRM, await macOf(joinerKey, transcript))));
+        const done = pairReader(await nextMessage(session, transport));
+        if (done.kind !== PAIR_DONE) throw new Error(OUT_OF_PLACE);
+        done.key(remote);
+        done.end();
+        await closing(transport);
+        return Object.freeze({peerId: idB, peer, mode: 'pin'});
+      } finally {
+        session.destroy();
+      }
+    },
+    /**
+     * Runs the responder until the end, each message sealed. `accept(peerId, peer)` keeps the joiner's
+     * key, and runs only after the PIN confirmed; only then is the joiner told it worked. A joiner that
+     * goes quiet ends the exchange at the desk's `pinTtl`. This module's responder offers only a PIN
+     * typed at the joiner, and refuses other modes as `disabled`.
+     */
+    async respond(desk, transport, {accept} = {}) {
+      once();
+      try {
+        const counter = pairDesks.get(desk);
+        if (!counter) throw new TypeError('A pairing desk is required');
+        if (typeof accept !== 'function') throw new TypeError('An accept function is required');
+        checkTransport(transport);
+        const [idA, idB] = [await peerIdOf(remote), await peerIdOf(local.public)];
+        const binding = await session.export(PAIR_EXPORT_LABEL, HASHLEN);
+        const hello = pairReader(await nextMessage(session, transport));
+        if (hello.kind !== PAIR_HELLO) throw new Error(OUT_OF_PLACE);
+        const mode = hello.byte();
+        hello.key(remote);
+        if (mode > PAIR_MODE_DEVICE) throw new Error(OUT_OF_PLACE);
+        if (mode !== PAIR_MODE_PIN_TYPED) throw await refuse(transport, 'disabled');
+        hello.end();
+        const deadline = counter.now() + counter.pinTtl;
+        const within = async () => {
+          let timer;
+          const expired = new Promise((_, reject) => {
+            timer = setTimeout(reject, Math.max(deadline - counter.now(), 0), EXPIRED);
+          });
+          try {
+            const message = await Promise.race([nextMessage(session, transport), expired]);
+            if (counter.now() >= deadline) throw EXPIRED;
+            return message;
+          } catch (error) {
+            if (error === EXPIRED) throw await refuse(transport, 'expired');
+            throw error;
+          } finally {
+            clearTimeout(timer);
+          }
+        };
+        const notReady = counter.ready();
+        if (notReady) throw await refuse(transport, notReady);
+        await transport.send(await session.seal(pairMessage(PAIR_READY, keyField(local.public), Uint8Array.of(PAIR_NO_SLOT))));
+        const pake = pairReader(await within());
+        if (pake.kind !== PAIR_PAKE) throw new Error(OUT_OF_PLACE);
+        const received = pake.short();
+        pake.end();
+        const taken = counter.take();
+        if (taken.refused) throw await refuse(transport, taken.refused);
+        const password = encoder.encode(taken.pin);
+        const {state, message} = await spakeStart(
+          false, password, encoder.encode(idA), encoder.encode(idB), counter.random,
+        );
+        const shared = await spakeFinish(state, received);
+        password.fill(0);
+        if (!shared) throw await refuse(transport, 'wrong-code');
+        const keys = await confirmationKeys(shared);
+        const transcript = pinTranscript(remote, local.public, received, message, binding);
+        const joinerKey = await macKey(keys.joiner);
+        const responderKey = await macKey(keys.responder);
+        await transport.send(await session.seal(
+          pairMessage(PAIR_REPLY, short(message), await macOf(responderKey, transcript)),
+        ));
+        const confirm = pairReader(await within());
+        if (confirm.kind !== PAIR_CONFIRM) throw new Error(OUT_OF_PLACE);
+        const tag = confirm.tag();
+        confirm.end();
+        if (!await macVerifies(joinerKey, tag, transcript)) throw await refuse(transport, 'wrong-code');
+        await accept(idA, peer);
+        await transport.send(await session.seal(pairMessage(PAIR_DONE, keyField(local.public))));
+        await closing(transport);
+        return Object.freeze({peerId: idA, peer, mode: 'pin'});
+      } finally {
+        session.destroy();
+      }
+    },
+  });
+}
+
+/**
+ * Starts a handshake that only pairs, as the side that dials. It accepts any proved key, unless
+ * `responder` names the id it must be; a PIN authenticates both keys either way. Other options as for
+ * `createInitiator`, and `random` as for `createPairingDesk`. `answer` gives a `pairing` and no session.
+ */
+export async function createPairingInitiator(identity, {responder, random = OS_RANDOM, ...config} = {}) {
+  const local = await checkIdentity(identity);
+  if (responder !== undefined && !PEER_ID.test(responder)) throw new Error('A pinned responder id is required');
+  return dialling(local, config, async id => {
+    if (responder !== undefined && id !== responder) throw new Error('Responder is not pinned');
+  }, async (session, remote) => ({
+    pairing: pairingSessionOf(session, local, remote, responder !== undefined, random),
+  }));
+}
+
+/**
+ * Starts a handshake that only pairs, as the side that accepts: it admits whoever proves a key, since a
+ * joiner is a stranger, and `accept` gives a `pairing` and no session. Options as for `createResponder`,
+ * without `allowClient`.
+ */
+export async function createPairingResponder(identity, config) {
+  const local = await checkIdentity(identity);
+  return accepting(local, config, async () => {}, async (session, remote) => ({
+    pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM),
+  }));
 }
 
 function requestResult(request) {
@@ -721,4 +1262,7 @@ export const profile = Object.freeze({id: PROFILE, protocol: PROTOCOL_NAME, meth
  * Not API, and it may change at any commit: the layer beneath the method, whose handshake takes
  * payloads the method never sends, which is what the published Noise test vectors need.
  */
-export const __testing = Object.freeze({newHandshake, newCipher, createSession, isCanonical});
+export const __testing = Object.freeze({
+  newHandshake, newCipher, createSession, isCanonical, pointAdd, pointMul, compress, decompress, passwordScalar,
+  spakeStartWith, spakeFinish, BASE, L, P, CURVE_D, SQRT_M1,
+});
