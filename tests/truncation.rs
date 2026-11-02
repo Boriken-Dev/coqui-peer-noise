@@ -172,25 +172,6 @@ fn a_long_record_refused_at_the_limit_leaves_the_session_as_it_was() {
 }
 
 #[test]
-fn a_peer_past_the_limit_is_refused_at_the_opener_and_the_session_ends() {
-    let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client.clone())
-        .with_responders(Trust::pinned([server.peer_id()]))
-        .with_rekey(false);
-    let listening = Noise::new(server)
-        .with_initiators(Trust::pinned([client.peer_id()]))
-        .with_key_limit(200);
-    let (near, far) = run(&dialing, &listening).unwrap();
-    let (mut near, mut far) = (near.session, far.session);
-    far.open(&near.seal(&[1; 100]).unwrap()).unwrap().unwrap();
-    assert!(matches!(
-        far.open(&near.seal(&[2; 100]).unwrap()),
-        Err(Error::LimitReached)
-    ));
-    assert!(matches!(far.seal(b"x"), Err(Error::Record)));
-}
-
-#[test]
 fn each_side_decides_about_rekeying_for_itself() {
     // One end with a low limit for its own sending, and the other far above it.
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
@@ -228,4 +209,32 @@ fn split_halves_work_apart() {
     let (_sealer, close) = writer.join().unwrap();
     assert_eq!(opener.open(&close).unwrap(), None);
     opener.verify_end().unwrap();
+}
+
+#[test]
+fn a_lower_limit_is_for_a_sides_own_sending_only() {
+    // One end with a limit of 200 against a peer at the default that does not change keys: the peer
+    // is within the default, so what it sends opens, past 200 bytes on one key.
+    for low_sends in [false, true] {
+        let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let dialing = Noise::new(client.clone())
+            .with_responders(Trust::pinned([server.peer_id()]))
+            .with_rekey(false);
+        let listening = Noise::new(server)
+            .with_initiators(Trust::pinned([client.peer_id()]))
+            .with_key_limit(200);
+        let (near, far) = run(&dialing, &listening).unwrap();
+        let (mut near, mut far) = (near.session, far.session);
+        // `far` is the one limited to 200.
+        let (sender, receiver) = if low_sends {
+            (&mut far, &mut near)
+        } else {
+            (&mut near, &mut far)
+        };
+        for index in 0..5u8 {
+            let message = vec![index; 100];
+            let record = sender.seal(&message).unwrap();
+            assert_eq!(receiver.open(&record).unwrap().unwrap(), message);
+        }
+    }
 }

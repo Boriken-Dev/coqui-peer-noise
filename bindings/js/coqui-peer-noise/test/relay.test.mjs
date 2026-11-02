@@ -7,7 +7,7 @@ import {setFlagsFromString} from 'node:v8';
 import {webcrypto} from 'node:crypto';
 import {
   __testing, createInitiator, createPairingInitiator, createPairingResponder, createResponder,
-  DEFAULT_KEY_LIMIT, generateIdentity,
+  DEFAULT_KEY_LIMIT, generateIdentity, recordLength, supported,
 } from '../src/index.mjs';
 import {asIs, parties, sessions, through} from './support.mjs';
 
@@ -349,15 +349,68 @@ test('a long record refused at the limit leaves the session as it was', async ()
   await assert.rejects(() => rekeying.atClient.seal(new Uint8Array(2000)), /limit/);
 });
 
-test('a peer past the limit is refused at the opener, and the session ends', async () => {
+test("a lower limit is for one side's own sending only: a peer at the default is still opened", async () => {
+  for (const lowSends of [false, true]) {
+    const client = await generateIdentity();
+    const server = await generateIdentity();
+    const i = await createInitiator(client, server.peerId, {rekey: false});
+    const r = await createResponder(server, {allowClient: async () => true, keyLimit: 200});
+    const {atClient, atServer} = await through(asIs, {i, r});
+    const [sender, receiver] = lowSends ? [atServer, atClient] : [atClient, atServer];
+    for (let index = 0; index < 5; index += 1) {
+      const message = new Uint8Array(100).fill(index);
+      assert.deepEqual(await receiver.open(await sender.seal(message)), message);
+    }
+  }
+});
+
+test('a message length becomes the record length the sealer makes', async () => {
+  const {atClient, atServer} = await sessions();
+  const part = 65518;
+  for (const length of [0, 1, part - 1, part, part + 1, 2 * part, 2 * part + 1, 2 ** 20, 2 ** 24]) {
+    const record = await atClient.seal(new Uint8Array(length));
+    assert.equal(record.length, recordLength(length), `a message of ${length}`);
+    assert.equal((await atServer.open(record)).length, length);
+  }
+  assert.equal(recordLength(2 ** 20) - 2 ** 20, 323);
+  assert.equal(recordLength(2 ** 24) - 2 ** 24, 4883);
+  assert.equal(recordLength(65519) - 65519, 38);
+  for (const bad of [-1, 1.5, NaN, '3', undefined]) assert.throws(() => recordLength(bad), RangeError);
+});
+
+test('supported() says the runtime has what the method needs, without a connection', async () => {
+  assert.equal(await supported(), true);
+  const real = globalThis.crypto;
+  const without = {getRandomValues: real.getRandomValues.bind(real), subtle: undefined};
+  Object.defineProperty(globalThis, 'crypto', {value: without, configurable: true});
+  try {
+    assert.equal(await supported(), false);
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', {value: real, configurable: true});
+  }
+  const broken = {
+    getRandomValues: real.getRandomValues.bind(real),
+    subtle: new Proxy(real.subtle, {get: (target, name) => name === 'generateKey' ? () => Promise.reject(new Error('X25519')) : target[name]?.bind(target)}),
+  };
+  Object.defineProperty(globalThis, 'crypto', {value: broken, configurable: true});
+  try {
+    assert.equal(await supported(), false);
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', {value: real, configurable: true});
+  }
+});
+
+test('a Buffer binding is copied when the call is made, not viewed', async () => {
   const client = await generateIdentity();
   const server = await generateIdentity();
-  const i = await createInitiator(client, server.peerId, {rekey: false});
-  const r = await createResponder(server, {allowClient: async () => true, keyLimit: 200});
-  const {atClient, atServer} = await through(asIs, {i, r});
-  await atServer.open(await atClient.seal(new Uint8Array(100)));
-  await assert.rejects(async () => atServer.open(await atClient.seal(new Uint8Array(100))), /limit/);
-  await assert.rejects(() => atServer.seal('x'), /session is over/);
+  const allow = async id => id === client.peerId;
+  const [one, two] = [Buffer.from([1, 2, 3]), Buffer.from([4, 5, 6])];
+  const starting = createInitiator(client, server.peerId, {binding: one});
+  one.fill(0);
+  const answering = createResponder(server, {allowClient: allow, binding: two});
+  two.fill(0);
+  const [i, r] = await Promise.all([starting, answering]);
+  await assert.rejects(async () => i.answer(await r.challenge(await i.hello())), /does not decrypt/);
 });
 
 test('settings are checked, and the default limit is 2^38', async () => {

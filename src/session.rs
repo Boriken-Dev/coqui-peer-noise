@@ -33,6 +33,16 @@ const fn cost(length: usize) -> u64 {
     (length as u64).saturating_add(MESSAGE_OVERHEAD)
 }
 
+/// The length of the record that carries a message of `message_length` bytes: 19 more up to
+/// 65518 bytes, and 19 more for each further 65518. A change of key, which a sender makes only at
+/// its key limit, adds 19 to the record that holds it.
+#[must_use]
+pub const fn record_length(message_length: usize) -> usize {
+    let parts = message_length.div_ceil(MAX_CONTENT);
+    let parts = if parts == 0 { 1 } else { parts };
+    message_length.saturating_add(parts.saturating_mul(LENGTH_FIELD + BARE_MESSAGE))
+}
+
 /// The settings a session runs under, from the method that made it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Limits {
@@ -192,7 +202,7 @@ impl Opener {
     ///
     /// [`Error::Record`] when the record was altered, replayed, reordered, made under other keys,
     /// not in its one shape, or came after the peer's close. [`Error::LimitReached`] when a peer
-    /// passes the limit on one key without changing it. Either way nothing after it is believed or
+    /// passes the larger of this side's limit and [`DEFAULT_KEY_LIMIT`] on one key without changing it. Either way nothing after it is believed or
     /// sent, in either direction.
     pub fn open(&mut self, record: &[u8]) -> Result<Option<Vec<u8>>, Error> {
         self.direction.check()?;
@@ -219,7 +229,8 @@ impl Opener {
             };
             let (kind, contents) = inner.split_first().ok_or_else(|| self.direction.fail())?;
             match *kind {
-                INNER_DATA if rest.is_empty() => {
+                // A last part is empty only when it is the whole message.
+                INNER_DATA if rest.is_empty() && (!contents.is_empty() || message.is_empty()) => {
                     message.extend_from_slice(contents);
                     return Ok(Some(message));
                 }
@@ -320,7 +331,12 @@ impl Session {
                 closed: false,
             },
             opener: Opener {
-                direction: Direction::new(receiving, limits.key_limit, failed),
+                // A peer may run to the default on a key, whatever this side's own sending limit.
+                direction: Direction::new(
+                    receiving,
+                    limits.key_limit.max(DEFAULT_KEY_LIMIT),
+                    failed,
+                ),
                 peer_closed: false,
             },
             exporter,
@@ -428,6 +444,23 @@ mod tests {
         )
     }
 
+    /// Both ends of one connection, the first the initiator.
+    fn pair(first: Limits, second: Limits) -> (Session, Session) {
+        let ends = |initiator, limits| {
+            Session::new(
+                Transport {
+                    h: [0; 32],
+                    initiator_to_responder: Cipher::new(&[1; 32]),
+                    responder_to_initiator: Cipher::new(&[2; 32]),
+                    exporter: Zeroizing::new(vec![3; 32]),
+                },
+                initiator,
+                limits,
+            )
+        };
+        (ends(true, first), ends(false, second))
+    }
+
     const LIMITS: Limits = Limits {
         key_limit: DEFAULT_KEY_LIMIT,
         rekey: true,
@@ -468,5 +501,51 @@ mod tests {
         near.set_nonces(u64::MAX);
         assert!(matches!(near.close(), Err(Error::Record)));
         assert!(matches!(near.verify_end(), Err(Error::Record)));
+    }
+
+    #[test]
+    fn a_peer_past_the_default_limit_on_one_key_is_refused_and_the_session_ends() {
+        let (mut near, mut far) = pair(LIMITS, LIMITS);
+        // 100 bytes cost 117 and 32 more.
+        far.opener.direction.charged = DEFAULT_KEY_LIMIT - 149;
+        far.open(&near.seal(&[1; 100]).unwrap()).unwrap().unwrap();
+        assert!(matches!(
+            far.open(&near.seal(&[2; 100]).unwrap()),
+            Err(Error::LimitReached)
+        ));
+        assert!(matches!(far.seal(b"x"), Err(Error::Record)));
+    }
+
+    #[test]
+    fn a_receiver_limits_a_peer_to_no_less_than_the_default_and_no_more_than_its_own_above_it() {
+        let low = Limits {
+            key_limit: 10,
+            rekey: true,
+        };
+        let high = Limits {
+            key_limit: DEFAULT_KEY_LIMIT * 2,
+            rekey: false,
+        };
+        assert_eq!(
+            pair(LIMITS, low).1.opener.direction.limit,
+            DEFAULT_KEY_LIMIT
+        );
+        assert_eq!(
+            pair(LIMITS, high).1.opener.direction.limit,
+            2 * DEFAULT_KEY_LIMIT
+        );
+        assert_eq!(pair(LIMITS, low).1.sealer.direction.limit, 10);
+    }
+
+    #[test]
+    fn a_part_then_an_empty_last_part_is_not_a_message() {
+        let (mut near, mut far) = pair(LIMITS, LIMITS);
+        let mut record = Vec::new();
+        near.sealer
+            .push(&mut record, INNER_PART, &[7; MAX_CONTENT])
+            .unwrap();
+        near.sealer.push(&mut record, INNER_DATA, &[]).unwrap();
+        assert!(matches!(far.open(&record), Err(Error::Record)));
+        assert!(matches!(far.seal(b"x"), Err(Error::Record)));
     }
 }

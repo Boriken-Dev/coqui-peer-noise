@@ -51,6 +51,46 @@ function subtle() {
   return globalThis.crypto.subtle;
 }
 
+/**
+ * Whether this runtime has what the method needs: X25519, AES-GCM, HKDF, HMAC and SHA-256 in
+ * `crypto.subtle`. It runs each once and makes no connection; a failure of any is `false`.
+ */
+export async function supported() {
+  try {
+    const api = subtle();
+    const pair = await api.generateKey(X25519, false, ['deriveBits']);
+    const theirs = await api.generateKey(X25519, false, ['deriveBits']);
+    const shared = await api.deriveBits({name: 'X25519', public: theirs.publicKey}, pair.privateKey, 256);
+    const key = new Uint8Array(shared);
+    const aes = await api.importKey('raw', key, 'AES-GCM', false, ['encrypt', 'decrypt']);
+    const iv = new Uint8Array(12);
+    const sealed = await api.encrypt({name: 'AES-GCM', iv, additionalData: new Uint8Array(), tagLength: 128}, aes, key);
+    const opened = new Uint8Array(await api.decrypt({name: 'AES-GCM', iv, additionalData: new Uint8Array(), tagLength: 128}, aes, sealed));
+    const hkdf = await api.importKey('raw', key, 'HKDF', false, ['deriveBits']);
+    const okm = await api.deriveBits({name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(), info: new Uint8Array()}, hkdf, 256);
+    const mac = await api.importKey('raw', key, HMAC, false, ['sign']);
+    const tag = await api.sign('HMAC', mac, key);
+    const digest = await api.digest('SHA-256', key);
+    return key.length === 32 && sealed.byteLength === 48 && opened.length === 32 &&
+      okm.byteLength === 32 && tag.byteLength === 32 && digest.byteLength === 32;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The length of the record that carries a message of `messageLength` bytes: 19 more up to 65518
+ * bytes, and 19 more for each further 65518. A change of key, which a sender makes only at its key
+ * limit, adds 19 to the record that holds it.
+ */
+export function recordLength(messageLength) {
+  if (!Number.isSafeInteger(messageLength) || messageLength < 0) {
+    throw new RangeError('A message length is a whole number, 0 or more');
+  }
+  const parts = Math.max(Math.ceil(messageLength / MAX_CONTENT), 1);
+  return messageLength + parts * (LENGTH_FIELD + BARE_MESSAGE);
+}
+
 function b64(bytes) {
   let text = '';
   for (const byte of bytes) text += String.fromCharCode(byte);
@@ -369,6 +409,8 @@ async function createSession(transport, initiator, settings) {
     return new Error(message);
   };
   const limitError = () => new Error('This key reached its limit');
+  // A peer may run to the default on a key, whatever this side's own sending limit.
+  const receiveLimit = Math.max(settings.keyLimit, DEFAULT_KEY_LIMIT);
   const cost = length => length + MESSAGE_OVERHEAD;
 
   const frame = (kind, contents) => sendingCipher.encrypt(new Uint8Array(), concat(Uint8Array.of(kind), contents))
@@ -451,7 +493,7 @@ async function createSession(transport, initiator, settings) {
           const sealed = rest.subarray(LENGTH_FIELD, LENGTH_FIELD + length);
           rest = rest.subarray(LENGTH_FIELD + length);
           if (length > BARE_MESSAGE) {
-            if (receiveCharged + cost(length) > settings.keyLimit) {
+            if (receiveCharged + cost(length) > receiveLimit) {
               status.failed = true;
               throw limitError();
             }
@@ -465,7 +507,8 @@ async function createSession(transport, initiator, settings) {
           }
           if (inner.length < 1) throw refused();
           const kind = inner[0];
-          if (kind === INNER_DATA && rest.length === 0) {
+          // A last part is empty only when it is the whole message.
+          if (kind === INNER_DATA && rest.length === 0 && (inner.length > 1 || message.length === 0)) {
             message.push(inner.subarray(1));
             return concat(...message);
           }
@@ -527,7 +570,8 @@ function options({keyLimit = DEFAULT_KEY_LIMIT, rekey = true, binding = new Uint
   return {
     keyLimit,
     rekey,
-    binding: binding.slice(),
+    // `Buffer.slice` is a view of the host's memory, which it may wipe; this is a copy.
+    binding: Uint8Array.from(binding),
     ephemeral: ephemeral ?? (() => subtle().generateKey(X25519, false, ['deriveBits'])),
     ephemeralReplaced: ephemeral !== undefined,
   };

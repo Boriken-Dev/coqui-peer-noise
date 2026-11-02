@@ -136,7 +136,8 @@ impl Noise {
     /// What one key may carry in one direction, each Noise message counting its length and 32;
     /// [`DEFAULT_KEY_LIMIT`] by default. There is no floor: a limit below what a message costs
     /// refuses that message, and a limit of zero passes only a close. Above the default, AES-GCM's
-    /// confidentiality margin shrinks.
+    /// confidentiality margin shrinks. A peer is held to the larger of this and the default, so a
+    /// lower limit changes only this side's own sending.
     #[must_use]
     pub fn with_key_limit(mut self, bytes: u64) -> Self {
         Arc::make_mut(&mut self.0).key_limit = bytes;
