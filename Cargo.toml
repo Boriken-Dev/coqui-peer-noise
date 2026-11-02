@@ -1,0 +1,50 @@
+[package]
+name = "coqui-peer-noise"
+version = "0.0.0-alpha.0"
+description = "The Noise method of coqui-peer: Noise_XX_25519_AESGCM_SHA256 between two X25519 keys, in a browser or natively, ending in an encrypted session"
+readme = "README.md"
+edition = "2024"
+rust-version = "1.89"
+license = "MPL-2.0"
+repository = "https://github.com/Boriken-Dev/coqui-peer-noise"
+homepage = "https://boriken-dev.github.io/coqui-peer-noise/"
+keywords = ["noise", "peer", "x25519", "handshake", "browser"]
+categories = ["cryptography", "authentication", "network-programming"]
+exclude = [".*", "*.local.*", "/bindings/", "/tools/"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+
+[dependencies]
+# The peer id, trust store and handshake this crate is a method of. The family has no releases for
+# now: its crates depend on each other by git revision.
+coqui-peer = { git = "https://github.com/Boriken-Dev/coqui-peer", rev = "1f00bfe6319f64e7ec038a7003746f4f031d538c" }
+# The DH function, zeroed on drop. The 2.x line shares curve25519-dalek 4 and rand_core 0.6 with
+# coqui-peer's `pin` feature, so one build compiles one of each.
+x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets", "zeroize"] }
+# The cipher function. Pre-1.0: the RustCrypto release line sharing sha2 and hkdf with coqui-peer.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+# Noise's HKDF, which is RFC 5869's with the chaining key as salt and no info. Pre-1.0: the same line.
+hkdf = { version = "0.13", default-features = false }
+# The hash function. Pre-1.0: the same line.
+sha2 = { version = "0.11.1", default-features = false }
+# The base64 of PEM; already a dependency of coqui-peer.
+data-encoding = { version = "2", default-features = false, features = ["alloc"] }
+# Ephemeral and long-term keys.
+getrandom = { version = "0.4", default-features = false }
+# Zeroes key bytes when they are dropped.
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+# Temporary store directories.
+tempfile = "3"
+# Reads the test vectors.
+serde_json = "1"
+# An independent Noise implementation, as the other end of the tests. Pre-1.0: the only such crate.
+# No default features: its `std` turns on ring, which the tests do not use. Its AES-GCM code takes
+# `KeyInit` from chacha20poly1305, so that feature is needed too.
+snow = { version = "0.10", default-features = false, features = ["use-aes-gcm", "use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }
