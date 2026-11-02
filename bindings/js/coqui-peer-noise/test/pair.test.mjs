@@ -258,6 +258,86 @@ test('a joiner that goes quiet is told the exchange expired', async () => {
   assert.equal((await joining).refusal, 'expired');
 });
 
+/** `promise`, or a failure saying it was still pending after `ms`. */
+function settlesWithin(promise, ms) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(reject, ms, new Error(`still pending after ${ms} ms`));
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+test('a stranger who says nothing ends at the desk\'s time, and is told it expired', async () => {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  const desk = createPairingDesk({pinTtl: 100});
+  desk.showPin();
+  const {atJoiner, atResponder} = await strangers(joiner, responder);
+  const [a, b, close] = pipe();
+  const started = Date.now();
+  await assert.rejects(
+    settlesWithin(atResponder.respond(desk, b, {accept: async () => assert.fail('not accepted')}), 1500),
+    {refusal: 'expired'},
+  );
+  assert.ok(Date.now() - started < 1000);
+  // What a joiner that speaks up now hears.
+  await assert.rejects(atJoiner.join('123456', a), {refusal: 'expired'});
+  close();
+});
+
+test('the first message has its own bound, under the desk\'s, and nothing below it is refused', async () => {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  const desk = createPairingDesk();
+  desk.showPin();
+  const quiet = async firstMessageTimeout => {
+    const {atResponder} = await strangers(joiner, responder, {responding: {firstMessageTimeout}});
+    const [, b] = pipe();
+    const started = Date.now();
+    await assert.rejects(
+      settlesWithin(atResponder.respond(desk, b, {accept: async () => assert.fail('not accepted')}), 1500),
+      {refusal: 'expired'},
+    );
+    return Date.now() - started;
+  };
+  assert.ok(await quiet(100) < 1000);
+  assert.ok(await quiet(0) < 1000);
+  for (const bad of [-1, NaN, '5', null]) {
+    await assert.rejects(createPairingResponder(responder, {firstMessageTimeout: bad}), /no meaning/, String(bad));
+  }
+});
+
+test('a first message timeout of zero reads nothing, even with a message waiting', async () => {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  const desk = createPairingDesk();
+  desk.showPin();
+  const {atResponder} = await strangers(joiner, responder, {responding: {firstMessageTimeout: 0}});
+  let reads = 0;
+  const sent = [];
+  const transport = {
+    async send(bytes) { sent.push(bytes); },
+    async recv() { reads += 1; return new Uint8Array(32); },
+  };
+  await assert.rejects(atResponder.respond(desk, transport, {accept: async () => assert.fail('not accepted')}), {refusal: 'expired'});
+  assert.equal(reads, 0);
+  assert.equal(sent.length, 1);
+});
+
+test('a time too long for a timer is not taken for no time at all', async () => {
+  const [joiner, responder] = [await generateIdentity(), await generateIdentity()];
+  const desk = createPairingDesk({pinTtl: 2 ** 40});
+  const {pin} = desk.showPin();
+  const {atJoiner, atResponder} = await strangers(joiner, responder, {responding: {firstMessageTimeout: 2 ** 40}});
+  const [a, b, close] = pipe();
+  const gate = {
+    async send(bytes) { await a.send(bytes); },
+    async recv() { await new Promise(resolve => { setTimeout(resolve, 30); }); return a.recv(); },
+  };
+  const [joined, served] = await settled(
+    close, atJoiner.join(pin, gate), atResponder.respond(desk, b, {accept: async () => {}}),
+  );
+  assert.equal(joined.status, 'fulfilled', joined.reason?.stack);
+  assert.equal(served.status, 'fulfilled', served.reason?.stack);
+});
+
 test('the desk\'s options have defaults and no floors, and meaningless ones are refused', () => {
   assert.match(createPairingDesk({pinLength: 1, pinAlphabet: 'x'}).showPin().pin, /^x$/);
   assert.match(createPairingDesk({pinLength: 12, pinAlphabet: 'AB'}).showPin().pin, /^[AB]{12}$/);

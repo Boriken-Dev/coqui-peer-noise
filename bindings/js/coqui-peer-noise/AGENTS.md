@@ -28,11 +28,12 @@ export async function createResponder(identity, {allowClient, ...options});
 // A stranger's handshake, which only pairs; see "Pairing" below.
 export async function createPairingInitiator(identity, {responder, random, ...options});
 // -> {async hello(), async answer(raw) -> {reply, peerId, pairing}}
-export async function createPairingResponder(identity, options);
+export async function createPairingResponder(identity, {firstMessageTimeout, ...options});
 // -> {async challenge(raw), async accept(raw) -> {peerId, pairing}}
 export function createPairingDesk({pinAlphabet, pinLength, pinTtl, pinAttempts, now, random});
 // -> frozen {showPin() -> {pin, expires}, shownPin() -> {pin, expires} | null, clearPin()}
 export const PAIR_EXPORT_LABEL;    // 'EXPORTER-coqui-pair'
+export const DEFAULT_FIRST_MESSAGE_TIMEOUT;   // 60000 (ms)
 
 // session (frozen):
 //   id                          Uint8Array(32), Noise's handshake hash; both ends agree; not secret
@@ -122,6 +123,10 @@ side waits for its transport. A joiner has no deadline of its own: bound it by e
 and start over on a new connection. `accept` runs only after the PIN confirmed, and the joiner hears it worked only after
 `accept` returned.
 
+- `firstMessageTimeout` (`createPairingResponder`): the milliseconds a joiner has, from the call to `respond`, to send its
+  first message, under the desk's `pinTtl`. Default `DEFAULT_FIRST_MESSAGE_TIMEOUT`, no floor: `0` is expired with nothing read.
+  So ask a person for the PIN before connecting, or raise this. Past it, or past `pinTtl` from that first message, the joiner
+  is told `expired`, and `respond` rejects with that `refusal`.
 - `responder` (`createPairingInitiator`): the id the handshake must prove; `verified` is then `true`. A PIN needs none: it
   authenticates both keys. Without it the initiator accepts any proved key, which is all a `pairing` can do.
 - Desk options, each with a default and no floor: `pinAlphabet` `'0123456789'`, `pinLength` `6`, `pinTtl` `600000` (ms, also how
