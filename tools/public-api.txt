@@ -119,11 +119,12 @@ pub fn coqui_peer_noise::PairingHandshake::receive(&mut self, &[u8]) -> core::re
 pub fn coqui_peer_noise::PairingHandshake::transmit(&mut self) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, coqui_peer_noise::Error>
 impl core::fmt::Debug for coqui_peer_noise::PairingHandshake
 pub fn coqui_peer_noise::PairingHandshake::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct coqui_peer_noise::PairingMethod(_)
+pub struct coqui_peer_noise::PairingMethod
 impl coqui_peer_noise::PairingMethod
 pub fn coqui_peer_noise::PairingMethod::identity(&self) -> &coqui_peer_noise::Identity
 pub fn coqui_peer_noise::PairingMethod::new(coqui_peer_noise::Identity) -> Self
 pub fn coqui_peer_noise::PairingMethod::weakened(&self) -> alloc::vec::Vec<coqui_peer::weakening::Weakening>
+pub const fn coqui_peer_noise::PairingMethod::with_first_message_timeout(self, core::option::Option<core::time::Duration>) -> Self
 pub fn coqui_peer_noise::PairingMethod::with_key_limit(self, u64) -> Self
 pub fn coqui_peer_noise::PairingMethod::with_random(self, coqui_peer::random::Random) -> Self
 pub fn coqui_peer_noise::PairingMethod::with_rekey(self, bool) -> Self
@@ -142,7 +143,7 @@ pub fn coqui_peer_noise::PairingSession::join<T: coqui_peer::drive::MessageTrans
 pub fn coqui_peer_noise::PairingSession::pair_channel(&self) -> core::result::Result<coqui_peer::pair::Channel, coqui_peer_noise::Error>
 pub const fn coqui_peer_noise::PairingSession::peer(&self) -> &coqui_peer::key::KeyMaterial
 pub fn coqui_peer_noise::PairingSession::peer_id(&self) -> coqui_peer::id::PeerId
-pub fn coqui_peer_noise::PairingSession::respond<T: coqui_peer::drive::MessageTransport + coqui_peer::drive::ReadTimeout>(self, &coqui_peer::store::TrustStore, &coqui_peer::pair::desk::PairingDesk, core::option::Option<core::net::socket_addr::SocketAddr>, &mut T) -> core::result::Result<coqui_peer::pair::Paired, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::PairingSession::respond<T: coqui_peer::drive::MessageTransport + coqui_peer_noise::CurrentReadTimeout>(self, &coqui_peer::store::TrustStore, &coqui_peer::pair::desk::PairingDesk, core::option::Option<core::net::socket_addr::SocketAddr>, &mut T) -> core::result::Result<coqui_peer::pair::Paired, coqui_peer_noise::Error>
 impl core::fmt::Debug for coqui_peer_noise::PairingSession
 pub fn coqui_peer_noise::PairingSession::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct coqui_peer_noise::Sealer
@@ -162,6 +163,7 @@ pub fn coqui_peer_noise::Session::split(self) -> (coqui_peer_noise::Sealer, coqu
 pub fn coqui_peer_noise::Session::verify_end(&self) -> core::result::Result<(), coqui_peer_noise::Error>
 impl core::fmt::Debug for coqui_peer_noise::Session
 pub fn coqui_peer_noise::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const coqui_peer_noise::DEFAULT_FIRST_MESSAGE_TIMEOUT: core::time::Duration
 pub const coqui_peer_noise::DEFAULT_KEY_LIMIT: u64
 pub const coqui_peer_noise::MAX_HANDSHAKE_MESSAGE: usize
 pub const coqui_peer_noise::MAX_PAIRING_RECORD: usize

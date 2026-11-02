@@ -343,6 +343,12 @@ pin or a store.
 - **Device flow** (Rust). The joiner must have verified the responder by a pin or a store, or `join` refuses unless told
   `allow_unverified`, which lets a relay pair in place of both sides.
 
+**How long a stranger may hold a responder.** Until the joiner's first message, the smaller of the transport's own read
+timeout and a setting (60 seconds by default, no floor; the module's is also under `pinTtl`). From that message, until the
+desk's deadline (`pin_ttl`, 10 minutes by default, or `device_ttl`). Past either, the responder sends refused, `02` expired,
+and ends; a time already spent is expired with nothing read. A slow peer does not stretch it: `FramedStream` and the module
+count from the start of the wait, not from the last byte.
+
 **What a person must take from this.** The PIN is the whole of the authentication between strangers, and it is short. Its
 strength is one guess in the number of codes per PIN shown (10^6 by default) and it rests on the attempts being counted,
 so a responder that raises `pin_attempts` raises that chance in proportion. A joiner that a person never gave the right PIN

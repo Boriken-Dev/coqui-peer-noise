@@ -13,7 +13,9 @@ use coqui_peer::pair::{
     CodeAlphabet, Pairing, PairingDesk, PairingJoiner, PairingResponder, Pin, PinRole,
 };
 use coqui_peer::{Handshake, Method, Random, ReadTimeout};
-use coqui_peer_noise::{MessageTransport, PairDial, PairingMethod, PairingSession, TrustStore};
+use coqui_peer_noise::{
+    CurrentReadTimeout, MessageTransport, PairDial, PairingMethod, PairingSession, TrustStore,
+};
 use serde_json::{Value, json};
 use support::{identity_of, pkcs8, public_of, scripted};
 
@@ -105,6 +107,12 @@ impl MessageTransport for &mut Kept {
 impl ReadTimeout for &mut Kept {
     fn set_read_timeout(&self, _: Option<core::time::Duration>) -> io::Result<()> {
         Ok(())
+    }
+}
+
+impl CurrentReadTimeout for &mut Kept {
+    fn current_read_timeout(&self) -> Option<core::time::Duration> {
+        None
     }
 }
 

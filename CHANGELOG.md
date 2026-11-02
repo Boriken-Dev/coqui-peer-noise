@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `PROTOCOL.md`, the published vectors in `tests/vectors/published.json`, and the shared vectors in
   `tests/vectors/session.json`.
 - `PairingMethod`, `PairingSession` and `PairDial`, with the `pin` feature: `coqui_peer::pair` sealed in a session of its own.
-  A stranger's session can carry nothing else.
+  A stranger's session can carry nothing else. `with_first_message_timeout` and `DEFAULT_FIRST_MESSAGE_TIMEOUT` bound how long
+  a stranger may say nothing, and it is told `Expired` when that runs out.
 - `createPairingInitiator`, `createPairingResponder` and `createPairingDesk` in the JavaScript module: a typed PIN in both
   roles, the same bytes as Rust, over `BigInt` arithmetic that is not constant-time.
 - `tests/vectors/pairing.json` and `tests/vectors/spake2.json`.

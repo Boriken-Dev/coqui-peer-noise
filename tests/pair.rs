@@ -3,10 +3,12 @@
 
 mod support;
 
-use std::io;
+use core::time::Duration;
+use std::io::{self, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Instant;
 
 use coqui_peer::pair::{
     CodeAlphabet, Mode, PairRefusal, Pairing, PairingDesk, PairingError, PairingJoiner,
@@ -17,8 +19,9 @@ use coqui_peer::{
     write_frame,
 };
 use coqui_peer_noise::{
-    Error, FramedStream, Identity, MAX_HANDSHAKE_MESSAGE, MAX_PAIRING_RECORD, MessageTransport,
-    Noise, PairingMethod, PairingSession, Trust, TrustStore, random,
+    CurrentReadTimeout, DEFAULT_FIRST_MESSAGE_TIMEOUT, Error, FramedStream, Identity,
+    MAX_HANDSHAKE_MESSAGE, MAX_PAIRING_RECORD, MessageTransport, Noise, PairingMethod,
+    PairingSession, Trust, TrustStore, random,
 };
 use support::{exchange, run};
 
@@ -42,8 +45,14 @@ impl MessageTransport for Pipe {
 }
 
 impl ReadTimeout for Pipe {
-    fn set_read_timeout(&self, _: Option<core::time::Duration>) -> io::Result<()> {
+    fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
         Ok(())
+    }
+}
+
+impl CurrentReadTimeout for Pipe {
+    fn current_read_timeout(&self) -> Option<Duration> {
+        None
     }
 }
 
@@ -805,4 +814,284 @@ fn a_joiner_that_stops_answering_is_told_the_exchange_expired() {
     // What the responder said to the hello, then its refusal: each a whole record.
     assert!(framed.recv().is_ok());
     assert!(framed.recv().is_ok(), "the refusal reached the joiner");
+}
+
+/// What a responder on its own thread reports: its result, how long it took, and its stream, so that
+/// the connection outlives the run.
+type Served = (Result<(), Error>, Duration, FramedStream<TcpStream>);
+
+fn serving_on_a_thread(
+    world: &World,
+    pairing: PairingSession,
+    socket: TcpStream,
+    prepare: impl FnOnce(&mut FramedStream<TcpStream>) + Send + 'static,
+) -> mpsc::Receiver<Served> {
+    let (done, finished) = mpsc::channel();
+    let (store, desk) = (world.store.clone(), world.desk.clone());
+    thread::spawn(move || {
+        let mut framed = FramedStream::new(socket, MAX_PAIRING_RECORD);
+        prepare(&mut framed);
+        let started = Instant::now();
+        let result = pairing.respond(&store, &desk, None, &mut framed).map(drop);
+        let _ = done.send((result, started.elapsed(), framed));
+    });
+    finished
+}
+
+#[test]
+fn a_stranger_who_says_nothing_ends_at_the_callers_timeout_and_is_told_it_expired() {
+    let world = world();
+    world.desk.show_pin().unwrap();
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let (near, far) = strangers(&joiner, &responder);
+    let (a, b) = connected();
+    let finished = serving_on_a_thread(&world, far, b, |framed| {
+        framed
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+    });
+    let (served, taken, framed) = finished
+        .recv_timeout(Duration::from_secs(5))
+        .expect("still in respond after 5 s against a timeout of 300 ms");
+    assert!(is_refusal(&served, PairRefusal::Expired), "{served:?}");
+    assert!(taken < Duration::from_secs(2), "ended after {taken:?}");
+    assert!(!world.store.is_accepted(&joiner.peer_id()));
+    // What a joiner that speaks up now hears.
+    let mut at_joiner = FramedStream::new(a, MAX_PAIRING_RECORD);
+    let joined = near
+        .join(typed("123456"), &mut at_joiner)
+        .and_then(coqui_peer_noise::PairDial::finish)
+        .map(drop);
+    assert!(is_refusal(&joined, PairRefusal::Expired), "{joined:?}");
+    drop(framed);
+}
+
+/// A socket whose sends take long enough to use up a deadline, and refuses a timeout of zero as a
+/// `TcpStream` does.
+struct SlowSends(TcpStream, Duration);
+
+impl io::Read for SlowSends {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buffer)
+    }
+}
+
+impl io::Write for SlowSends {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        thread::sleep(self.1);
+        self.0.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl ReadTimeout for SlowSends {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        ReadTimeout::set_read_timeout(&self.0, timeout)
+    }
+}
+
+#[test]
+fn a_deadline_used_up_by_a_slow_send_is_told_to_the_joiner_as_expired() {
+    let world = world_with(PairingOptions {
+        pin_ttl: Duration::from_millis(200),
+        ..PairingOptions::default()
+    });
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let (near, far) = strangers(&joiner, &responder);
+    let hello = sealed_hello(near);
+    let (a, b) = connected();
+    let serving = {
+        let (store, desk) = (world.store.clone(), world.desk.clone());
+        thread::spawn(move || {
+            let slow = SlowSends(b, Duration::from_millis(300));
+            let mut framed = FramedStream::new(slow, MAX_PAIRING_RECORD);
+            far.respond(&store, &desk, None, &mut framed).map(drop)
+        })
+    };
+    world.desk.show_pin().unwrap();
+    let mut framed = FramedStream::new(a, MAX_PAIRING_RECORD);
+    framed.send(&hello).unwrap();
+    let served = serving.join().unwrap();
+    assert!(is_refusal(&served, PairRefusal::Expired), "{served:?}");
+    // The ready its slow send carried, then the refusal, each a whole record.
+    assert!(framed.recv().is_ok());
+    assert!(framed.recv().is_ok(), "the refusal reached the joiner");
+}
+
+#[test]
+fn one_byte_per_read_does_not_hold_a_responder_past_the_exchanges_deadline() {
+    let world = world_with(PairingOptions {
+        pin_ttl: Duration::from_millis(500),
+        ..PairingOptions::default()
+    });
+    world.desk.show_pin().unwrap();
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let (near, far) = strangers(&joiner, &responder);
+    let (a, b) = connected();
+    let finished = serving_on_a_thread(&world, far, b, |_| {});
+    let mut framed = FramedStream::new(a, MAX_PAIRING_RECORD);
+    framed.send(&sealed_hello(near)).unwrap();
+    framed.recv().unwrap();
+    let socket = framed.into_inner();
+    // A frame of 300 bytes, whose bytes come far apart: each gap is well inside the deadline.
+    let dripping = {
+        let mut socket = socket.try_clone().unwrap();
+        thread::spawn(move || {
+            let mut frame = 300u32.to_be_bytes().to_vec();
+            frame.resize(304, 0);
+            for byte in frame {
+                if socket.write_all(&[byte]).is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        })
+    };
+    let (served, taken, framed) = finished
+        .recv_timeout(Duration::from_secs(5))
+        .expect("still in respond after 5 s against a deadline of 500 ms");
+    assert!(is_refusal(&served, PairRefusal::Expired), "{served:?}");
+    assert!(taken < Duration::from_secs(2), "ended after {taken:?}");
+    socket.shutdown(std::net::Shutdown::Both).unwrap();
+    drop(framed);
+    dripping.join().unwrap();
+}
+
+/// A transport that keeps what it is told about timeouts and what it sends, and whose reads fail at
+/// once. `own` is the timeout a caller set on it.
+#[derive(Default)]
+struct Armed {
+    own: Option<Duration>,
+    armed: std::sync::Mutex<Vec<Option<Duration>>>,
+    sent: Vec<Vec<u8>>,
+    reads: usize,
+}
+
+impl ReadTimeout for Armed {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.armed.lock().unwrap().push(timeout);
+        Ok(())
+    }
+}
+
+impl CurrentReadTimeout for Armed {
+    fn current_read_timeout(&self) -> Option<Duration> {
+        self.own
+    }
+}
+
+impl MessageTransport for Armed {
+    fn send(&mut self, message: &[u8]) -> io::Result<()> {
+        self.sent.push(message.to_vec());
+        Ok(())
+    }
+
+    fn recv(&mut self) -> io::Result<Vec<u8>> {
+        self.reads += 1;
+        Err(io::ErrorKind::UnexpectedEof.into())
+    }
+}
+
+fn first_armed(method: PairingMethod, own: Option<Duration>) -> Option<Duration> {
+    let (joiner, world) = (Identity::generate().unwrap(), world());
+    let near = PairingMethod::new(joiner);
+    let (mut a, mut b) = (near.initiate().unwrap(), method.respond(None).unwrap());
+    while !(a.is_complete() && b.is_complete()) {
+        while let Some(message) = a.transmit().unwrap() {
+            b.receive(&message).unwrap();
+        }
+        while let Some(message) = b.transmit().unwrap() {
+            a.receive(&message).unwrap();
+        }
+    }
+    let far = b.finish().unwrap().session;
+    let mut armed = Armed {
+        own,
+        ..Armed::default()
+    };
+    let _ = far.respond(&world.store, &world.desk, None, &mut armed);
+    let armed = armed.armed.lock().unwrap();
+    armed.first().copied().flatten()
+}
+
+/// Whether `found` is `wanted` and a little less: what was left of it when the read was armed.
+fn about(found: Option<Duration>, wanted: Duration) -> bool {
+    found.is_some_and(|found| found <= wanted && found + Duration::from_secs(5) > wanted)
+}
+
+#[test]
+fn before_the_first_message_a_responder_waits_for_the_smaller_of_its_setting_and_the_transports() {
+    let method = || PairingMethod::new(Identity::generate().unwrap());
+    let found = first_armed(method(), None);
+    assert!(about(found, DEFAULT_FIRST_MESSAGE_TIMEOUT), "{found:?}");
+    let shorter = Duration::from_secs(20);
+    let found = first_armed(method(), Some(shorter));
+    assert!(about(found, shorter), "the caller's, shorter: {found:?}");
+    let found = first_armed(method(), Some(DEFAULT_FIRST_MESSAGE_TIMEOUT * 2));
+    assert!(
+        about(found, DEFAULT_FIRST_MESSAGE_TIMEOUT),
+        "ours, shorter: {found:?}"
+    );
+    let set = method().with_first_message_timeout(Some(shorter));
+    let found = first_armed(set, None);
+    assert!(about(found, shorter), "the setting: {found:?}");
+    // With no bound asked for, the transport is left alone.
+    let unset = method().with_first_message_timeout(None);
+    assert_eq!(first_armed(unset, None), None);
+    let unset = method().with_first_message_timeout(None);
+    let found = first_armed(unset, Some(shorter));
+    assert!(about(found, shorter), "the caller's alone: {found:?}");
+}
+
+#[test]
+fn a_first_message_timeout_of_zero_refuses_with_nothing_read_and_the_joiner_is_told() {
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let world = world();
+    let (near, far) = pairing_run(
+        &PairingMethod::new(joiner.clone()),
+        &PairingMethod::new(responder).with_first_message_timeout(Some(Duration::ZERO)),
+    )
+    .unwrap();
+    let mut armed = Armed::default();
+    let served = far
+        .session
+        .respond(&world.store, &world.desk, None, &mut armed)
+        .map(drop);
+    assert!(is_refusal(&served, PairRefusal::Expired), "{served:?}");
+    assert_eq!(armed.reads, 0, "nothing read");
+    assert!(armed.armed.lock().unwrap().is_empty(), "no timeout armed");
+    assert_eq!(armed.sent.len(), 1);
+    let (mut a, mut b) = pipes();
+    b.send(&armed.sent[0]).unwrap();
+    let joined = near
+        .session
+        .join(typed("123456"), &mut a)
+        .and_then(coqui_peer_noise::PairDial::finish)
+        .map(drop);
+    assert!(is_refusal(&joined, PairRefusal::Expired), "{joined:?}");
+}
+
+#[test]
+fn what_is_looser_than_the_first_message_default_is_reported() {
+    let method = || PairingMethod::new(Identity::generate().unwrap());
+    let listed = |method: &PairingMethod| {
+        method
+            .weakened()
+            .iter()
+            .any(|weakening| weakening.setting == "first_message_timeout")
+    };
+    assert!(!listed(&method()));
+    assert!(!listed(
+        &method().with_first_message_timeout(Some(Duration::ZERO))
+    ));
+    assert!(!listed(&method().with_first_message_timeout(Some(
+        DEFAULT_FIRST_MESSAGE_TIMEOUT
+    ))));
+    assert!(listed(&method().with_first_message_timeout(Some(
+        DEFAULT_FIRST_MESSAGE_TIMEOUT + Duration::from_secs(1)
+    ))));
+    assert!(listed(&method().with_first_message_timeout(None)));
 }
