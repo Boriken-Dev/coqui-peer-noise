@@ -53,6 +53,49 @@ test('the group behaves: the order, addition, the identity, and a round trip of 
   assert.deepEqual(compress(decompress(compress(pointMul(BASE, a)))), compress(pointMul(BASE, a)));
 });
 
+test('a scalar\'s length does not show in the time of its multiplication', () => {
+  // One coarse check of one signal, and BigInt promises nothing about time. Interleaved, so that drift
+  // falls on both, and against the largest gap in length there is.
+  const median = values => values.slice().sort((a, b) => a - b)[values.length >> 1];
+  const timed = scalar => {
+    const started = process.hrtime.bigint();
+    pointMul(BASE, scalar);
+    return Number(process.hrtime.bigint() - started);
+  };
+  const [one, most] = [[], []];
+  for (let round = 0; round < 150; round += 1) {
+    const [a, b] = [timed(1n), timed(L - 1n)];
+    if (round >= 30) {
+      one.push(a);
+      most.push(b);
+    }
+  }
+  const ratio = median(one) / median(most);
+  assert.ok(ratio > 0.85 && ratio < 1.15, `a one-bit scalar took ${ratio} of the time of a 253-bit one`);
+});
+
+test('a multiplication is what repeated addition gives, torsion and the largest scalars included', () => {
+  const byAddition = (point, scalar) => {
+    let [result, add] = [pointMul(BASE, 0n), point];
+    for (let rest = scalar; rest > 0n; rest >>= 1n) {
+      if (rest & 1n) result = pointAdd(result, add);
+      add = pointAdd(add, add);
+    }
+    return result;
+  };
+  const eighth = decompress(unhex('26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05'));
+  assert.equal(toHex(compress(pointMul(eighth, 8n))), `01${'00'.repeat(31)}`, 'a point of order 8');
+  assert.notEqual(toHex(compress(pointMul(eighth, 4n))), `01${'00'.repeat(31)}`);
+  const scalars = [
+    0n, 1n, 2n, 7n, 8n, 9n, 1234567n, 2n ** 128n, L - 1n, L, L + 1n, 8n * L - 1n, 8n * L, 2n ** 255n, 2n ** 256n - 1n,
+  ];
+  for (const point of [BASE, eighth, pointAdd(BASE, eighth)]) {
+    for (const scalar of scalars) {
+      assert.equal(toHex(compress(pointMul(point, scalar))), toHex(compress(byAddition(point, scalar))), String(scalar));
+    }
+  }
+});
+
 test('an encoding that is not its point\'s one encoding is refused', () => {
   // y = p, and y = p + 1, each the same residue as a small value.
   const p = unhex('ed' + 'ff'.repeat(30) + '7f');

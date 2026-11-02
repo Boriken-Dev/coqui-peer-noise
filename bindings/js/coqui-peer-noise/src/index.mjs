@@ -712,7 +712,8 @@ const CURVE_D = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978
 const SQRT_M1 = 0x2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0n;
 const BASE_X = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an;
 const BASE_Y = 0x6666666666666666666666666666666666666666666666666666666666666658n;
-const SCALAR_BITS = 256;
+// Any scalar of up to 256 bits, with LADDER_OFFSET added.
+const SCALAR_BITS = 257;
 
 const fe = value => {
   const reduced = value % P;
@@ -728,6 +729,11 @@ function powP(base, exponent) {
   }
   return result;
 }
+
+// 8L is a multiple of the order of every element, so adding it changes no result, torsion included. A
+// scalar below L then has one top bit, so no register stays the identity, whose zero coordinates make
+// BigInt's work cheap, and the length RFC 9382 section 7 says must not show does not.
+const LADDER_OFFSET = 8n * L;
 
 const pointOf = (x, y) => ({x, y, z: 1n, t: fe(x * y)});
 const IDENTITY = pointOf(0n, 1n);
@@ -748,9 +754,10 @@ function pointAdd(a, b) {
 
 /** A Montgomery ladder: the same additions whatever the scalar's bits, which index the pair. */
 function pointMul(point, scalar) {
+  const offset = scalar + LADDER_OFFSET;
   const pair = [IDENTITY, point];
   for (let index = SCALAR_BITS - 1; index >= 0; index -= 1) {
-    const bit = Number((scalar >> BigInt(index)) & 1n);
+    const bit = Number((offset >> BigInt(index)) & 1n);
     pair[1 - bit] = pointAdd(pair[0], pair[1]);
     pair[bit] = pointAdd(pair[bit], pair[bit]);
   }

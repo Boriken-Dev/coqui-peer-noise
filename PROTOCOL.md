@@ -392,9 +392,12 @@ A key in a message must be the one the session proved, to the byte, or the excha
 WebCrypto has no group operation, so the module computes SPAKE2 over Edwards25519 with `BigInt`, written to match the crate.
 
 - **It is not constant-time.** Each scalar runs one fixed sequence of complete additions, with no branch on its bits except
-  an array index, but `BigInt` itself promises nothing about time, and the password's scalar goes through it. Someone who
-  can measure this page's work closely enough to learn that scalar could then test PINs offline. No such attack was
-  attempted or measured, and how close it needs to be is not known. A PIN lives for one attempt by default.
+  an array index, but `BigInt` itself promises nothing about time, and the password's scalar goes through it. RFC 9382 section
+  7 says an implementation that leaks the scalar's length must not be used, and gives no form for avoiding it. Here `8L` is
+  added to each scalar, which changes no result, so that no register stays the identity while the top bits are zero. That
+  removes this one signal, as a test on one machine shows, and nothing else. Someone who can measure this page's work closely
+  enough to learn the password's scalar could then test PINs offline. No such attack was attempted, and how close it needs to
+  be is not known. A PIN lives for one attempt by default.
 - **Its checks.** The `spake2` crate's own known answer (`tests/vectors/spake2.json`, copied and never regenerated) in both
   roles; points times scalars against Node's Ed25519 public keys; Rust's records of a right and a wrong PIN to the byte; and
   real runs against Rust in Node and in Chrome and Edge. Nothing here is a proof that it is correct on every input.
