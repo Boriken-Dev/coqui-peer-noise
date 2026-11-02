@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use coqui_peer::{Method, drive_messages};
 use coqui_peer_noise::{Identity, MessageTransport, Noise, PROFILE, Random, Trust};
-use support::{Attacker, dh_of, public_of};
+use support::{Attacker, dh_of, public_of, rekeyed};
 
 const LONG_TERM: [u8; 32] = [0x11; 32];
 const OTHER_LONG_TERM: [u8; 32] = [0x22; 32];
@@ -27,7 +27,7 @@ static SOURCE_OTHER_LONG_TERM: [[u8; 32]; 1] = [OTHER_LONG_TERM];
 static SOURCE_INITIATOR: [[u8; 32]; 1] = [INITIATOR_EPHEMERAL];
 static SOURCE_RESPONDER: [[u8; 32]; 1] = [RESPONDER_EPHEMERAL];
 
-const DERIVED_COUNT: usize = 6;
+const DERIVED_COUNT: usize = 7;
 const NEEDLE_COUNT: usize = 5 + DERIVED_COUNT;
 static HITS: [AtomicUsize; NEEDLE_COUNT] = [const { AtomicUsize::new(0) }; NEEDLE_COUNT];
 static ARMED: AtomicBool = AtomicBool::new(false);
@@ -151,6 +151,7 @@ fn derived() -> [[u8; 32]; DERIVED_COUNT] {
         initiator,
         responder,
         exporter,
+        rekeyed(&initiator),
     ]
 }
 
@@ -218,6 +219,7 @@ fn no_freed_block_holds_a_scalar_a_chaining_key_a_traffic_key_or_the_export_secr
         "initiator traffic key",
         "responder traffic key",
         "export secret",
+        "initiator traffic key after its change",
     ];
     let found: Vec<_> = names
         .iter()
