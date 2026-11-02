@@ -1209,6 +1209,58 @@ fn a_first_message_timeout_of_zero_refuses_with_nothing_read_and_the_joiner_is_t
 }
 
 #[test]
+fn a_read_that_ends_a_little_early_does_not_end_the_exchange() {
+    // Every other read ends as timed out at once, as an operating system may end a timed one early:
+    // before the first message and after it.
+    struct Early(Pipe, bool);
+
+    impl MessageTransport for Early {
+        fn send(&mut self, message: &[u8]) -> io::Result<()> {
+            self.0.send(message)
+        }
+
+        fn recv(&mut self) -> io::Result<Vec<u8>> {
+            self.1 = !self.1;
+            if self.1 {
+                Err(io::ErrorKind::TimedOut.into())
+            } else {
+                self.0.recv()
+            }
+        }
+    }
+
+    impl ReadTimeout for Early {
+        fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CurrentReadTimeout for Early {
+        fn current_read_timeout(&self) -> Option<Duration> {
+            None
+        }
+    }
+
+    let world = world();
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let shown = world.desk.show_pin().unwrap();
+    let (near, far) = strangers(&joiner, &responder);
+    let (mut a, b) = pipes();
+    let serving = {
+        let (store, desk) = (world.store.clone(), world.desk.clone());
+        thread::spawn(move || {
+            far.respond(&store, &desk, None, &mut Early(b, false))
+                .map(drop)
+        })
+    };
+    near.join(typed(shown.pin.as_str()), &mut a)
+        .and_then(coqui_peer_noise::PairDial::finish)
+        .unwrap();
+    serving.join().unwrap().unwrap();
+    assert!(world.store.is_accepted(&joiner.peer_id()));
+}
+
+#[test]
 fn what_is_looser_than_the_first_message_default_is_reported() {
     let method = || PairingMethod::new(Identity::generate().unwrap());
     let listed = |method: &PairingMethod| {
