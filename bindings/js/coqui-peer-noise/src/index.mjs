@@ -472,11 +472,11 @@ async function createSession(transport, initiator, settings) {
             peerClosed = true;
             return null;
           }
-          if (kind === INNER_KEY_CHANGE && inner.length === 1 && rest.length > 0 && !afterKeyChange) {
+          if (kind === INNER_KEY_CHANGE && inner.length === 1 && !afterKeyChange) {
             await receivingCipher.rekey();
             receiveCharged = 0;
             afterKeyChange = true;
-          } else if (kind === INNER_PART && length === MAX_NOISE_MESSAGE && rest.length > 0) {
+          } else if (kind === INNER_PART && length === MAX_NOISE_MESSAGE) {
             message.push(inner.subarray(1));
             afterKeyChange = false;
           } else {

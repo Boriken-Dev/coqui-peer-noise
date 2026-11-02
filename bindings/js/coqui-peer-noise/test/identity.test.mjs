@@ -49,6 +49,12 @@ test('an identity with an extractable key or a false id is refused', async () =>
   await assert.rejects(() => createInitiator({...fresh, peerId: id}, id), /non-extractable/);
   await assert.rejects(() => createInitiator({...fresh, publicKey: 'AAAA'}, id), /non-extractable/);
   await assert.rejects(() => createInitiator({...fresh, publicKey: '@@@'}, id), /non-extractable/);
+  // Another prefix before the same key: its id is computed from the key, so only the prefix can tell.
+  const otherPrefix = Buffer.from(fresh.publicKey, 'base64url');
+  otherPrefix[0] ^= 1;
+  await assert.rejects(
+    () => createInitiator({...fresh, publicKey: otherPrefix.toString('base64url')}, id), /non-extractable/,
+  );
   const p256 = await webcrypto.subtle.generateKey({name: 'ECDH', namedCurve: 'P-256'}, false, ['deriveBits']);
   await assert.rejects(() => createInitiator({...fresh, privateKey: p256.privateKey}, id), /non-extractable/);
   await assert.rejects(() => createInitiator(fresh, 'not an id'), /pinned responder id/);

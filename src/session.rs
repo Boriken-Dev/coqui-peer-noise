@@ -225,16 +225,14 @@ impl Opener {
                     self.peer_closed = true;
                     return Ok(None);
                 }
-                INNER_KEY_CHANGE
-                    if contents.is_empty() && !rest.is_empty() && !after_key_change =>
-                {
+                INNER_KEY_CHANGE if contents.is_empty() && !after_key_change => {
                     if !self.direction.cipher.rekey() {
                         return Err(self.direction.fail());
                     }
                     self.direction.charged = 0;
                     after_key_change = true;
                 }
-                INNER_PART if sealed.len() == MAX_NOISE_MESSAGE && !rest.is_empty() => {
+                INNER_PART if sealed.len() == MAX_NOISE_MESSAGE => {
                     message.extend_from_slice(contents);
                     after_key_change = false;
                 }

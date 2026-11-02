@@ -114,9 +114,18 @@ fn the_reserved_nonce_is_never_used_by_a_message() {
     assert!(cipher.encrypt(&[], b"the last").is_some());
     assert!(cipher.encrypt(&[], b"one more").is_none());
     assert_eq!(cipher.remaining(), 0);
+    // A ciphertext that is valid at that nonce, as REKEY would make one.
+    use aes_gcm::Aes256Gcm;
+    use aes_gcm::aead::{Aead, KeyInit};
+    let mut iv = [0xffu8; 12];
+    iv[..4].fill(0);
+    let valid = Aes256Gcm::new_from_slice(&[7; 32])
+        .unwrap()
+        .encrypt(&iv.into(), [0u8; 32].as_slice())
+        .unwrap();
     let mut other = Cipher::new(&[7; 32]);
     other.set_nonce(u64::MAX);
-    assert!(other.decrypt(&[], &[0; 32]).is_none());
+    assert!(other.decrypt(&[], &valid).is_none());
 }
 
 #[test]

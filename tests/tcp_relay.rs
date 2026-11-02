@@ -222,6 +222,74 @@ fn a_relay_cannot_answer_for_a_pinned_server_on_real_sockets() {
 }
 
 #[test]
+fn a_relay_holding_a_run_with_each_end_cannot_pass_one_ends_records_to_the_other() {
+    // Misbinding: both ends trust the relay, each proved its key to the relay, and the relay wants
+    // the server to take the client's record as coming from the relay. Each pair has its own keys.
+    let (client, server, relay) = (
+        coqui_peer_noise::Identity::generate().unwrap(),
+        coqui_peer_noise::Identity::generate().unwrap(),
+        coqui_peer_noise::Identity::generate().unwrap(),
+    );
+    let pinned = |id| coqui_peer_noise::Trust::pinned([id]);
+    let dialing =
+        coqui_peer_noise::Noise::new(client.clone()).with_responders(pinned(relay.peer_id()));
+    let relay_answers =
+        coqui_peer_noise::Noise::new(relay.clone()).with_initiators(pinned(client.peer_id()));
+    let relay_dials =
+        coqui_peer_noise::Noise::new(relay.clone()).with_responders(pinned(server.peer_id()));
+    let listening = coqui_peer_noise::Noise::new(server).with_initiators(pinned(relay.peer_id()));
+    let sockets = sockets();
+    let (outer, inner) = (
+        sockets.outer.local_addr().unwrap(),
+        sockets.inner.local_addr().unwrap(),
+    );
+    let serving = thread::spawn(move || {
+        let (mut socket, _) = sockets.inner.accept().unwrap();
+        let mut far = drive_stream(listening.respond(None).unwrap(), &mut socket).unwrap();
+        let id = *far.session.id();
+        let forwarded = read_frame(&mut socket).unwrap();
+        (
+            id,
+            matches!(far.session.open(&forwarded), Err(Error::Record)),
+        )
+    });
+    let dial = thread::spawn(move || {
+        let mut socket = TcpStream::connect(outer).unwrap();
+        let mut near = drive_stream(dialing.initiate().unwrap(), &mut socket).unwrap();
+        write_frame(&mut socket, &near.session.seal(b"as the client").unwrap()).unwrap();
+        *near.session.id()
+    });
+    let (mut from_client, _) = sockets.outer.accept().unwrap();
+    let mut to_server = TcpStream::connect(inner).unwrap();
+    drive_stream(relay_answers.respond(None).unwrap(), &mut from_client).unwrap();
+    drive_stream(relay_dials.initiate().unwrap(), &mut to_server).unwrap();
+    forward(&mut from_client, &mut to_server);
+    let client_id = dial.join().unwrap();
+    let (server_id, refused) = serving.join().unwrap();
+    assert_ne!(client_id, server_id);
+    assert!(refused, "the server believed a record of another run");
+}
+
+#[test]
+fn a_relay_reflecting_a_handshake_message_is_refused_on_real_sockets() {
+    let (_, _, dialing, _) = pinned_pair();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let relaying = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let first = read_frame(&mut socket).unwrap();
+        write_frame(&mut socket, &first).unwrap();
+    });
+    let mut socket = TcpStream::connect(address).unwrap();
+    let outcome = drive_stream(dialing.initiate().unwrap(), &mut socket);
+    assert!(matches!(
+        outcome,
+        Err(coqui_peer::DriveError::Handshake(Error::Malformed))
+    ));
+    relaying.join().unwrap();
+}
+
+#[test]
 fn a_binding_refuses_a_relay_that_ends_the_outer_channel_on_real_sockets() {
     let (_, _, dialing, listening) = pinned_pair();
     let sockets = sockets();
