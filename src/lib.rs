@@ -32,5 +32,5 @@ pub use pairing::{
     DEFAULT_FIRST_MESSAGE_TIMEOUT, MAX_PAIRING_RECORD, PAIR_EXPORT_LABEL, PairDial,
     PairingHandshake, PairingMethod, PairingSession,
 };
-pub use session::{DEFAULT_KEY_LIMIT, Opener, Sealer, Session};
+pub use session::{DEFAULT_KEY_LIMIT, Opener, Sealer, Session, record_length};
 pub use trust::Trust;

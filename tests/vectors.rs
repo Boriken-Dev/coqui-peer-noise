@@ -298,6 +298,10 @@ fn refused_records(initiator_key: [u8; 32], responder_key: [u8; 32]) -> Vec<Valu
         [f.message(4, b"short"), f.message(1, b"data")].concat()
     };
     let part_last = forger().message(4, &full);
+    let empty_after_part = {
+        let mut f = forger();
+        [f.message(4, &full), f.message(1, b"")].concat()
+    };
     let mut wrong_direction = Forger::new(responder_key);
     vec![
         entry("empty", Vec::new()),
@@ -332,6 +336,7 @@ fn refused_records(initiator_key: [u8; 32], responder_key: [u8; 32]) -> Vec<Valu
         ),
         entry("a part shorter than a whole Noise message", short_part),
         entry("a part as the last message", part_last),
+        entry("an empty last part after a part", empty_after_part),
         entry(
             "under the other direction's key",
             wrong_direction.message(1, b"data"),
