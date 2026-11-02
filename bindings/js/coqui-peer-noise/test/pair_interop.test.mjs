@@ -108,7 +108,7 @@ test('a connection that proves a key and says nothing more pairs nobody, and lea
   const rust = await rustResponder();
   const socket = await dial(rust.port);
   try {
-    const initiator = await createInitiator(identity, rust.peerId);
+    const initiator = await createPairingInitiator(identity, {responder: rust.peerId});
     socket.send(await initiator.hello());
     const {reply} = await initiator.answer(await socket.next());
     socket.send(reply);

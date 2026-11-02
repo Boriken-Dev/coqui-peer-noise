@@ -208,7 +208,8 @@ impl<T: MessageTransport> PairDial<'_, T> {
 ```
 
 **A stranger's session is this type, and only this type.** `Noise` cannot admit an unknown key, and `PairingSession` cannot
-carry an application message, so what serves the application cannot be reached by proving just any key. Drive the handshake
+carry an application message, so what serves the application cannot be reached by proving just any key. The two purposes
+differ in the prologue, so a run of one against the other is `Error::BadProof` at the second message. Drive the handshake
 as `Noise`'s, then `join` or `respond`, which seal every message and end with a close record. `respond` blocks in
 `PairingDesk::wait` for the operator. On success the responder has `accept_key`ed the joiner and the joiner stores
 `Paired::peer`. Then both reconnect under `Noise`, with `Trust::Store` or a pin, and the full key is what the handshake

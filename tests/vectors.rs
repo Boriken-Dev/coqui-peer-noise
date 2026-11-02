@@ -37,7 +37,7 @@ fn long_message() -> Vec<u8> {
 
 fn prologue(binding: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    for field in [PROFILE.as_bytes(), binding] {
+    for field in [PROFILE.as_bytes(), b"ordinary", binding] {
         out.extend_from_slice(&u32::try_from(field.len()).unwrap().to_be_bytes());
         out.extend_from_slice(field);
     }

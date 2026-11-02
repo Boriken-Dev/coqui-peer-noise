@@ -20,8 +20,8 @@ use coqui_peer::{
 };
 use coqui_peer_noise::{
     CurrentReadTimeout, DEFAULT_FIRST_MESSAGE_TIMEOUT, Error, FramedStream, Identity,
-    MAX_HANDSHAKE_MESSAGE, MAX_PAIRING_RECORD, MessageTransport, Noise, PairingMethod,
-    PairingSession, Trust, TrustStore, random,
+    MAX_HANDSHAKE_MESSAGE, MAX_PAIRING_RECORD, MessageTransport, Noise, PROFILE, PROTOCOL_NAME,
+    PairingMethod, PairingSession, Trust, TrustStore, random,
 };
 use support::{exchange, run};
 
@@ -505,72 +505,140 @@ fn two_sessions_of_the_same_peers_do_not_share_a_pairing() {
     assert!(!world.store.is_accepted(&joiner.peer_id()));
 }
 
-/// An ordinary session opposite a pairing session: the same handshake on the wire, and a peer that can
-/// say whatever it likes in the exchange.
-fn opposite_a_responder(
-    joiner: &Identity,
-    responder: &Identity,
-) -> (coqui_peer_noise::Session, PairingSession) {
-    let dialing = Noise::new(joiner.clone()).with_responders(Trust::pinned([responder.peer_id()]));
-    let (mut near, mut far) = (
-        dialing.initiate().unwrap(),
-        PairingMethod::new(responder.clone()).respond(None).unwrap(),
-    );
-    while !(near.is_complete() && far.is_complete()) {
-        while let Some(message) = near.transmit().unwrap() {
-            far.receive(&message).unwrap();
-        }
-        while let Some(message) = far.transmit().unwrap() {
-            near.receive(&message).unwrap();
-        }
+/// A peer that follows nothing: `snow` on this wire's pairing prologue, which can say whatever it likes
+/// in the exchange, as a record of one Noise message.
+struct Unruly(snow::TransportState);
+
+impl Unruly {
+    const KEY: [u8; 32] = [0x66; 32];
+
+    fn identity() -> Identity {
+        support::identity_of(Self::KEY)
     }
-    (
-        near.finish().unwrap().session,
-        far.finish().unwrap().session,
-    )
+
+    fn builder(prologue: &[u8]) -> snow::Builder<'_> {
+        snow::Builder::new(PROTOCOL_NAME.parse().unwrap())
+            .prologue(prologue)
+            .unwrap()
+            .local_private_key(&Self::KEY)
+            .unwrap()
+    }
+
+    fn prologue() -> Vec<u8> {
+        let mut out = Vec::new();
+        for field in [PROFILE.as_bytes(), b"pair", b""] {
+            out.extend_from_slice(&u32::try_from(field.len()).unwrap().to_be_bytes());
+            out.extend_from_slice(field);
+        }
+        out
+    }
+
+    /// `Unruly` as the initiator, opposite a pairing responder.
+    fn opposite_a_responder(responder: &Identity) -> (Self, PairingSession) {
+        let prologue = Self::prologue();
+        let mut near = Self::builder(&prologue).build_initiator().unwrap();
+        let mut far = PairingMethod::new(responder.clone()).respond(None).unwrap();
+        let (mut buffer, mut scratch) = ([0u8; 256], [0u8; 256]);
+        let written = near.write_message(&[], &mut buffer).unwrap();
+        far.receive(&buffer[..written]).unwrap();
+        near.read_message(&far.transmit().unwrap().unwrap(), &mut scratch)
+            .unwrap();
+        let written = near.write_message(&[], &mut buffer).unwrap();
+        far.receive(&buffer[..written]).unwrap();
+        (
+            Self(near.into_transport_mode().unwrap()),
+            far.finish().unwrap().session,
+        )
+    }
+
+    /// `Unruly` as the responder, opposite a pairing joiner.
+    fn opposite_a_joiner(joiner: &Identity) -> (Self, PairingSession) {
+        let prologue = Self::prologue();
+        let mut far = Self::builder(&prologue).build_responder().unwrap();
+        let mut near = PairingMethod::new(joiner.clone()).initiate().unwrap();
+        let (mut buffer, mut scratch) = ([0u8; 256], [0u8; 256]);
+        far.read_message(&near.transmit().unwrap().unwrap(), &mut scratch)
+            .unwrap();
+        let written = far.write_message(&[], &mut buffer).unwrap();
+        near.receive(&buffer[..written]).unwrap();
+        far.read_message(&near.transmit().unwrap().unwrap(), &mut scratch)
+            .unwrap();
+        (
+            Self(far.into_transport_mode().unwrap()),
+            near.finish().unwrap().session,
+        )
+    }
+
+    /// A record of the sealed close.
+    fn close(&mut self) -> Vec<u8> {
+        let mut buffer = [0u8; 64];
+        let written = self.0.write_message(&[2], &mut buffer).unwrap();
+        let mut record = u16::try_from(written).unwrap().to_be_bytes().to_vec();
+        record.extend_from_slice(&buffer[..written]);
+        record
+    }
 }
 
 #[test]
 fn a_responder_reports_a_close_in_the_middle_as_truncated() {
     let world = world();
-    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let responder = Identity::generate().unwrap();
     world.desk.show_pin().unwrap();
-    let (mut peer, pairing) = opposite_a_responder(&joiner, &responder);
+    let (mut peer, pairing) = Unruly::opposite_a_responder(&responder);
     let (mut a, mut b) = pipes();
-    a.send(&peer.close().unwrap()).unwrap();
+    a.send(&peer.close()).unwrap();
     assert!(matches!(
         pairing.respond(&world.store, &world.desk, None, &mut b),
         Err(Error::Truncated)
     ));
-    assert!(!world.store.is_accepted(&joiner.peer_id()));
+    assert!(!world.store.is_accepted(&Unruly::identity().peer_id()));
 }
 
 #[test]
 fn a_joiner_reports_a_close_in_the_middle_as_truncated() {
-    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let listening =
-        Noise::new(responder.clone()).with_initiators(Trust::pinned([joiner.peer_id()]));
-    let (mut near, mut far) = (
-        PairingMethod::new(joiner).initiate().unwrap(),
-        listening.respond(None).unwrap(),
-    );
-    while !(near.is_complete() && far.is_complete()) {
-        while let Some(message) = near.transmit().unwrap() {
-            far.receive(&message).unwrap();
-        }
-        while let Some(message) = far.transmit().unwrap() {
-            near.receive(&message).unwrap();
-        }
-    }
-    let (pairing, mut peer) = (
-        near.finish().unwrap().session,
-        far.finish().unwrap().session,
-    );
+    let joiner = Identity::generate().unwrap();
+    let (mut peer, pairing) = Unruly::opposite_a_joiner(&joiner);
     let (mut a, mut b) = pipes();
-    b.send(&peer.close().unwrap()).unwrap();
+    b.send(&peer.close()).unwrap();
     assert!(matches!(
         pairing.join(typed("123456"), &mut a),
         Err(Error::Truncated)
+    ));
+}
+
+/// `dialing` and `listening` are of different methods; where a run between them stops, and how.
+fn misrouted(
+    dialing: &mut impl Handshake<Error = Error>,
+    listening: &mut impl Handshake<Error = Error>,
+) -> Result<(), Error> {
+    let first = dialing.transmit()?.expect("the first message");
+    listening.receive(&first)?;
+    let second = listening.transmit()?.expect("the second message");
+    dialing.receive(&second)
+}
+
+#[test]
+fn a_run_of_one_purpose_fails_at_the_second_message_against_the_other() {
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    // A client pinning the bridge, sent to the bridge's pairing endpoint.
+    let mut dialing = Noise::new(joiner.clone())
+        .with_responders(Trust::pinned([responder.peer_id()]))
+        .initiate()
+        .unwrap();
+    let mut listening = PairingMethod::new(responder.clone()).respond(None).unwrap();
+    assert!(matches!(
+        misrouted(&mut dialing, &mut listening),
+        Err(Error::BadProof)
+    ));
+    // A joiner sent to the ordinary endpoint of a bridge that already trusts it.
+    let mut dialing = PairingMethod::new(joiner.clone()).initiate().unwrap();
+    let mut listening = Noise::new(responder)
+        .with_initiators(Trust::pinned([joiner.peer_id()]))
+        .respond(None)
+        .unwrap();
+    assert!(matches!(
+        misrouted(&mut dialing, &mut listening),
+        Err(Error::BadProof)
     ));
 }
 
