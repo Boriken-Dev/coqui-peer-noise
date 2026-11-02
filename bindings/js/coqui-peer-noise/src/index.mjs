@@ -871,6 +871,11 @@ const REFUSALS = Object.freeze([null, 'wrong-code', 'expired', 'exhausted', 'thr
 const refusalByte = name => REFUSALS.indexOf(name);
 const EXPIRED = Symbol('expired');
 const OUT_OF_PLACE = 'A pairing message is malformed or unexpected';
+// How long a responder waits for a joiner's first message unless told otherwise, in milliseconds. A
+// stranger who proved a key and says nothing holds a connection for this long.
+export const DEFAULT_FIRST_MESSAGE_TIMEOUT = 60_000;
+// setTimeout takes at most this, and fires at once above it.
+const MAX_TIMER = 2 ** 31 - 1;
 
 function refusal(name) {
   return Object.assign(new Error(`The pairing was refused: ${name}`), {refusal: name});
@@ -1045,7 +1050,7 @@ export function createPairingDesk({
 }
 
 /** What a pairing handshake ends in: a proved key that is nobody yet. It runs one exchange and carries nothing else. */
-function pairingSessionOf(session, local, remote, verified, random) {
+function pairingSessionOf(session, local, remote, verified, random, firstMessageTimeout) {
   let used = false;
   const once = () => {
     if (used) throw new Error('A pairing session runs one exchange');
@@ -1120,9 +1125,11 @@ function pairingSessionOf(session, local, remote, verified, random) {
     },
     /**
      * Runs the responder until the end, each message sealed. `accept(peerId, peer)` keeps the joiner's
-     * key, and runs only after the PIN confirmed; only then is the joiner told it worked. A joiner that
-     * goes quiet ends the exchange at the desk's `pinTtl`. This module's responder offers only a PIN
-     * typed at the joiner, and refuses other modes as `disabled`.
+     * key, and runs only after the PIN confirmed; only then is the joiner told it worked. The joiner has
+     * the smaller of `firstMessageTimeout` and the desk's `pinTtl` from this call to send its first
+     * message, and `pinTtl` from that message to finish; past either it is told `expired`, and a time
+     * already spent is expired with nothing read. This module's responder offers only a PIN typed at the
+     * joiner, and refuses other modes as `disabled`.
      */
     async respond(desk, transport, {accept} = {}) {
       once();
@@ -1131,22 +1138,16 @@ function pairingSessionOf(session, local, remote, verified, random) {
         if (!counter) throw new TypeError('A pairing desk is required');
         if (typeof accept !== 'function') throw new TypeError('An accept function is required');
         checkTransport(transport);
+        const called = counter.now();
         const [idA, idB] = [await peerIdOf(remote), await peerIdOf(local.public)];
         const binding = await session.export(PAIR_EXPORT_LABEL, HASHLEN);
-        const hello = pairReader(await nextMessage(session, transport));
-        if (hello.kind !== PAIR_HELLO) throw new Error(OUT_OF_PLACE);
-        const mode = hello.byte();
-        hello.key(remote);
-        if (mode > PAIR_MODE_DEVICE) throw new Error(OUT_OF_PLACE);
-        if (mode !== PAIR_MODE_PIN_TYPED) throw await refuse(transport, 'disabled');
-        hello.end();
-        const deadline = counter.now() + counter.pinTtl;
-        const within = async () => {
+        const within = async deadline => {
           let timer;
-          const expired = new Promise((_, reject) => {
-            timer = setTimeout(reject, Math.max(deadline - counter.now(), 0), EXPIRED);
-          });
           try {
+            if (counter.now() >= deadline) throw EXPIRED;
+            const expired = new Promise((_, reject) => {
+              timer = setTimeout(reject, Math.min(deadline - counter.now(), MAX_TIMER), EXPIRED);
+            });
             const message = await Promise.race([nextMessage(session, transport), expired]);
             if (counter.now() >= deadline) throw EXPIRED;
             return message;
@@ -1157,10 +1158,18 @@ function pairingSessionOf(session, local, remote, verified, random) {
             clearTimeout(timer);
           }
         };
+        const hello = pairReader(await within(called + Math.min(counter.pinTtl, firstMessageTimeout)));
+        if (hello.kind !== PAIR_HELLO) throw new Error(OUT_OF_PLACE);
+        const mode = hello.byte();
+        hello.key(remote);
+        if (mode > PAIR_MODE_DEVICE) throw new Error(OUT_OF_PLACE);
+        if (mode !== PAIR_MODE_PIN_TYPED) throw await refuse(transport, 'disabled');
+        hello.end();
+        const deadline = counter.now() + counter.pinTtl;
         const notReady = counter.ready();
         if (notReady) throw await refuse(transport, notReady);
         await transport.send(await session.seal(pairMessage(PAIR_READY, keyField(local.public), Uint8Array.of(PAIR_NO_SLOT))));
-        const pake = pairReader(await within());
+        const pake = pairReader(await within(deadline));
         if (pake.kind !== PAIR_PAKE) throw new Error(OUT_OF_PLACE);
         const received = pake.short();
         pake.end();
@@ -1180,7 +1189,7 @@ function pairingSessionOf(session, local, remote, verified, random) {
         await transport.send(await session.seal(
           pairMessage(PAIR_REPLY, short(message), await macOf(responderKey, transcript)),
         ));
-        const confirm = pairReader(await within());
+        const confirm = pairReader(await within(deadline));
         if (confirm.kind !== PAIR_CONFIRM) throw new Error(OUT_OF_PLACE);
         const tag = confirm.tag();
         confirm.end();
@@ -1214,12 +1223,17 @@ export async function createPairingInitiator(identity, {responder, random = OS_R
 /**
  * Starts a handshake that only pairs, as the side that accepts: it admits whoever proves a key, since a
  * joiner is a stranger, and `accept` gives a `pairing` and no session. Options as for `createResponder`,
- * without `allowClient`.
+ * without `allowClient`, and `firstMessageTimeout`: the milliseconds a joiner has to send its first
+ * message, under the desk's `pinTtl`. `DEFAULT_FIRST_MESSAGE_TIMEOUT` by default, with no floor: 0 refuses
+ * as expired without reading.
  */
-export async function createPairingResponder(identity, config) {
+export async function createPairingResponder(identity, {firstMessageTimeout = DEFAULT_FIRST_MESSAGE_TIMEOUT, ...config} = {}) {
+  if (typeof firstMessageTimeout !== 'number' || !(firstMessageTimeout >= 0)) {
+    throw new Error('A firstMessageTimeout of that kind has no meaning');
+  }
   const local = await checkIdentity(identity);
   return accepting(local, config, async () => {}, async (session, remote) => ({
-    pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM),
+    pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM, firstMessageTimeout),
   }));
 }
 

@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   A stranger's session can carry nothing else. `with_first_message_timeout` and `DEFAULT_FIRST_MESSAGE_TIMEOUT` bound how long
   a stranger may say nothing, and it is told `Expired` when that runs out.
 - `createPairingInitiator`, `createPairingResponder` and `createPairingDesk` in the JavaScript module: a typed PIN in both
-  roles, the same bytes as Rust, over `BigInt` arithmetic that is not constant-time.
+  roles, the same bytes as Rust, over `BigInt` arithmetic that is not constant-time. `firstMessageTimeout` and
+  `DEFAULT_FIRST_MESSAGE_TIMEOUT` bound how long a stranger may say nothing, and it is told `expired` when that runs out.
 - `tests/vectors/pairing.json` and `tests/vectors/spake2.json`.
 - `tools/proxy-run`: a real nginx between a real browser and the Rust side, by hand and not in CI.
