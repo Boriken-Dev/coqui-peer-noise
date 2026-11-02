@@ -218,7 +218,8 @@ fn a_wrong_pin_is_refused_at_the_confirmation_and_nobody_is_accepted() {
     let shown = world.desk.show_pin().unwrap();
     let (joined, served) = attempt(&world, &joiner, &responder, other_pin(shown.pin.as_str()));
     assert!(is_refusal(&joined, PairRefusal::WrongCode));
-    assert!(served.is_err());
+    // The joiner found out first, and says so, so the responder learns why rather than a cut.
+    assert!(is_refusal(&served, PairRefusal::WrongCode), "{served:?}");
     assert!(!world.store.is_accepted(&joiner.peer_id()));
 }
 
@@ -495,6 +496,75 @@ fn two_sessions_of_the_same_peers_do_not_share_a_pairing() {
     assert!(!world.store.is_accepted(&joiner.peer_id()));
 }
 
+/// An ordinary session opposite a pairing session: the same handshake on the wire, and a peer that can
+/// say whatever it likes in the exchange.
+fn opposite_a_responder(
+    joiner: &Identity,
+    responder: &Identity,
+) -> (coqui_peer_noise::Session, PairingSession) {
+    let dialing = Noise::new(joiner.clone()).with_responders(Trust::pinned([responder.peer_id()]));
+    let (mut near, mut far) = (
+        dialing.initiate().unwrap(),
+        PairingMethod::new(responder.clone()).respond(None).unwrap(),
+    );
+    while !(near.is_complete() && far.is_complete()) {
+        while let Some(message) = near.transmit().unwrap() {
+            far.receive(&message).unwrap();
+        }
+        while let Some(message) = far.transmit().unwrap() {
+            near.receive(&message).unwrap();
+        }
+    }
+    (
+        near.finish().unwrap().session,
+        far.finish().unwrap().session,
+    )
+}
+
+#[test]
+fn a_responder_reports_a_close_in_the_middle_as_truncated() {
+    let world = world();
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    world.desk.show_pin().unwrap();
+    let (mut peer, pairing) = opposite_a_responder(&joiner, &responder);
+    let (mut a, mut b) = pipes();
+    a.send(&peer.close().unwrap()).unwrap();
+    assert!(matches!(
+        pairing.respond(&world.store, &world.desk, None, &mut b),
+        Err(Error::Truncated)
+    ));
+    assert!(!world.store.is_accepted(&joiner.peer_id()));
+}
+
+#[test]
+fn a_joiner_reports_a_close_in_the_middle_as_truncated() {
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let listening =
+        Noise::new(responder.clone()).with_initiators(Trust::pinned([joiner.peer_id()]));
+    let (mut near, mut far) = (
+        PairingMethod::new(joiner).initiate().unwrap(),
+        listening.respond(None).unwrap(),
+    );
+    while !(near.is_complete() && far.is_complete()) {
+        while let Some(message) = near.transmit().unwrap() {
+            far.receive(&message).unwrap();
+        }
+        while let Some(message) = far.transmit().unwrap() {
+            near.receive(&message).unwrap();
+        }
+    }
+    let (pairing, mut peer) = (
+        near.finish().unwrap().session,
+        far.finish().unwrap().session,
+    );
+    let (mut a, mut b) = pipes();
+    b.send(&peer.close().unwrap()).unwrap();
+    assert!(matches!(
+        pairing.join(typed("123456"), &mut a),
+        Err(Error::Truncated)
+    ));
+}
+
 #[test]
 fn the_methods_refuse_each_others_gaps() {
     let identity = Identity::generate().unwrap();
@@ -509,6 +579,8 @@ fn the_methods_refuse_each_others_gaps() {
     assert!(matches!(exchange(&mut a, &mut b), Err(Error::Untrusted)));
 }
 
+type Tamper = Box<dyn Fn(usize, Vec<u8>) -> Option<Vec<u8>> + Send>;
+
 /// A plain relay on real sockets: each direction's frames through `tamper`, whose `None` ends the
 /// connection in that direction.
 fn relayed(
@@ -516,9 +588,7 @@ fn relayed(
     far: TcpStream,
     tamper: impl Fn(usize, Vec<u8>) -> Option<Vec<u8>> + Send + Clone + 'static,
 ) -> [thread::JoinHandle<()>; 2] {
-    let pass = |mut from: TcpStream,
-                mut to: TcpStream,
-                tamper: Box<dyn Fn(usize, Vec<u8>) -> Option<Vec<u8>> + Send>| {
+    let pass = |mut from: TcpStream, mut to: TcpStream, tamper: Tamper| {
         thread::spawn(move || {
             let mut index = 0;
             while let Ok(frame) = read_frame(&mut from) {
