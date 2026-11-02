@@ -154,6 +154,60 @@ test('a relay answering for a pinned server on a real socket fails the pin', asy
   }
 });
 
+test('a relay holding a run with each end cannot pass one end\'s records to the other', async () => {
+  // Misbinding: both ends trust the relay, and the relay wants the server to take the client's record
+  // as coming from the relay. Each pair has its own keys.
+  const [client, server, relay] = [await generateIdentity(), await generateIdentity(), await generateIdentity()];
+  const [outer, inner] = [await listen(), await listen()];
+  const [clientSocket, serverSocket] = [await dial(outer.port), await dial(inner.port)];
+  const [fromClient, toServer] = [await outer.accept(), await inner.accept()];
+  try {
+    const i = await createInitiator(client, relay.peerId);
+    const asRelay = await createResponder(relay, {allowClient: async id => id === client.peerId});
+    clientSocket.send(await i.hello());
+    fromClient.send(await asRelay.challenge(await fromClient.next()));
+    const {reply, session: atClient} = await i.answer(await clientSocket.next());
+    clientSocket.send(reply);
+    await asRelay.accept(await fromClient.next());
+
+    const relayDials = await createInitiator(relay, server.peerId);
+    const r = await createResponder(server, {allowClient: async id => id === relay.peerId});
+    serverSocket.send(await relayDials.hello());
+    toServer.send(await r.challenge(await toServer.next()));
+    const dialed = await relayDials.answer(await serverSocket.next());
+    serverSocket.send(dialed.reply);
+    const {peerId, session: atServer} = await r.accept(await toServer.next());
+    assert.equal(peerId, relay.peerId);
+    assert.notDeepEqual(atClient.id, atServer.id);
+
+    clientSocket.send(await atClient.seal('as the client'));
+    serverSocket.send(await fromClient.next());
+    await assert.rejects(async () => atServer.open(await toServer.next()), /does not open/);
+  } finally {
+    for (const end of [clientSocket, serverSocket, fromClient, toServer]) end.destroy();
+    outer.close();
+    inner.close();
+  }
+});
+
+test('a relay reflecting a handshake message is refused on real sockets', async () => {
+  const client = await generateIdentity();
+  const server = await generateIdentity();
+  const listener = await listen();
+  const socket = await dial(listener.port);
+  const accepted = await listener.accept();
+  try {
+    const i = await createInitiator(client, server.peerId);
+    socket.send(await i.hello());
+    accepted.send(await accepted.next());
+    await assert.rejects(async () => i.answer(await socket.next()), /Invalid peer message/);
+  } finally {
+    socket.destroy();
+    accepted.destroy();
+    listener.close();
+  }
+});
+
 test('a binding refuses a relay that ends the outer channel on real sockets', async () => {
   const client = await generateIdentity();
   const server = await generateIdentity();

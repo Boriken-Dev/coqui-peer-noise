@@ -115,6 +115,26 @@ fn third_presenting(first: &[u8], key: [u8; 32], se: [u8; 32]) -> Vec<u8> {
     out
 }
 
+/// A second message that is right in every way, and carries a payload the method never sends.
+fn second_with_payload(first: &[u8], payload: &[u8]) -> Vec<u8> {
+    let e = public_of(RESPONDER_EPHEMERAL);
+    let mut state = up_to_ee(first, &e);
+    let mut out = e.to_vec();
+    out.extend_from_slice(&state.encrypt_and_hash(&public_of(RESPONDER_STATIC)));
+    state.mix_key(&dh_of(INITIATOR_EPHEMERAL, public_of(RESPONDER_STATIC)));
+    out.extend_from_slice(&state.encrypt_and_hash(payload));
+    out
+}
+
+/// A third message that is right in every way, and carries a payload the method never sends.
+fn third_with_payload(first: &[u8], payload: &[u8]) -> Vec<u8> {
+    let mut state = after_second(first);
+    let mut out = state.encrypt_and_hash(&public_of(INITIATOR_STATIC));
+    state.mix_key(&dh_of(INITIATOR_STATIC, public_of(RESPONDER_EPHEMERAL)));
+    out.extend_from_slice(&state.encrypt_and_hash(payload));
+    out
+}
+
 fn refused_entry(name: &str, error: &str, message: &[u8]) -> Value {
     json!({"name": name, "error": error, "message": hex(message)})
 }
@@ -129,6 +149,11 @@ fn refused_first(first: &[u8]) -> Vec<Value> {
         refused_entry("the top bit set on a real key", "Malformed", &high_bit),
         refused_entry("p, not reduced", "Malformed", &p_plus(0)),
         refused_entry("p + 1, not reduced", "Malformed", &p_plus(1)),
+        refused_entry(
+            "p + 2, not reduced and not of small order",
+            "Malformed",
+            &p_plus(2),
+        ),
     ];
     for (index, point) in small_order().iter().enumerate() {
         list.push(refused_entry(
@@ -161,7 +186,12 @@ fn refused_second(first: &[u8], second: &[u8]) -> Vec<Value> {
         refused_entry(
             "a static key not reduced, with a right tag",
             "Malformed",
-            &second_presenting(first, p_plus(1), dh_of(INITIATOR_EPHEMERAL, p_plus(1))),
+            &second_presenting(first, p_plus(2), dh_of(INITIATOR_EPHEMERAL, p_plus(2))),
+        ),
+        refused_entry(
+            "a real payload, with a right tag",
+            "Malformed",
+            &second_with_payload(first, b"x"),
         ),
         refused_entry(
             "the initiator's own key, with a right tag",
@@ -200,7 +230,12 @@ fn refused_third(first: &[u8], third: &[u8]) -> Vec<Value> {
         refused_entry(
             "a static key not reduced, with a right tag",
             "Malformed",
-            &third_presenting(first, p_plus(1), dh_of(RESPONDER_EPHEMERAL, p_plus(1))),
+            &third_presenting(first, p_plus(2), dh_of(RESPONDER_EPHEMERAL, p_plus(2))),
+        ),
+        refused_entry(
+            "a real payload, with a right tag",
+            "Malformed",
+            &third_with_payload(first, b"x"),
         ),
         refused_entry(
             "the responder's own key, with a right tag",
@@ -370,6 +405,9 @@ fn build() -> Value {
         }));
     }
 
+    // A peer that goes on after its own close, which the code would refuse to do.
+    let mut after_close = Forger::new(initiator_key);
+
     // The same run with a binding.
     let (mut a, mut b) = (
         initiator()
@@ -407,6 +445,10 @@ fn build() -> Value {
         "records": records,
         "longRecord": {"length": LONG_MESSAGE, "modulo": 251, "recordSha256": sha256_hex(&long)},
         "closes": {"initiator": hex(&close_near), "responder": hex(&close_far)},
+        "afterClose": {
+            "close": hex(&after_close.message(2, b"")),
+            "data": hex(&after_close.message(1, b"late")),
+        },
         "keyLimit": {"limit": KEY_LIMIT, "records": limited_records},
         "binding": {
             "value": hex(BINDING),
@@ -627,6 +669,22 @@ fn every_listed_record_is_refused_and_ends_the_session() {
         assert!(matches!(far.close(), Err(Error::Record)), "{name}");
         assert!(matches!(far.verify_end(), Err(Error::Record)), "{name}");
     }
+}
+
+#[test]
+fn a_well_made_record_after_the_peers_close_is_refused() {
+    let vectors = committed();
+    let (mut a, mut b) = (
+        initiator().initiate().unwrap(),
+        responder().respond(None).unwrap(),
+    );
+    support::exchange(&mut a, &mut b).unwrap();
+    let mut far = b.finish().unwrap().session;
+    let close = unhex(vectors["afterClose"]["close"].as_str().unwrap());
+    assert_eq!(far.open(&close).unwrap(), None);
+    let late = unhex(vectors["afterClose"]["data"].as_str().unwrap());
+    assert!(matches!(far.open(&late), Err(Error::Record)));
+    assert!(matches!(far.verify_end(), Err(Error::Record)));
 }
 
 #[test]

@@ -1,5 +1,9 @@
 {
   "_": "Shared by both implementations. Regenerate with: cargo test --test vectors -- --ignored regenerate",
+  "afterClose": {
+    "close": "00115e963efd9cd249a8857a94e1069306f8d3",
+    "data": "0015fc7da4b2f3d7c4a7981c3fa01e3dec679c4fda1045"
+  },
   "binding": {
     "id": "45aa65b8bd068a8f188bcf978961c6102dd89abb9fced78e4f7c6b3edd5e927e",
     "messages": [
@@ -109,6 +113,11 @@
         "error": "Malformed",
         "message": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
         "name": "p + 1, not reduced"
+      },
+      {
+        "error": "Malformed",
+        "message": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "name": "p + 2, not reduced and not of small order"
       },
       {
         "error": "Malformed",
@@ -274,8 +283,13 @@
       },
       {
         "error": "Malformed",
-        "message": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6bcd8720575ab8ab13e373bea6218389222dca1f5f50774c65658babb21f41557776b51bd9a573f17a698f2ff349347876f668e9ecda3dc06401e3cb63c5a65ba9",
+        "message": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6bcc8720575ab8ab13e373bea6218389222dca1f5f50774c65658babb21f415577d20d05f10a3c6cf5ae9168b93b13fe48cc7423ccd125cf35ced049a2d0b4fbf0",
         "name": "a static key not reduced, with a right tag"
+      },
+      {
+        "error": "Malformed",
+        "message": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b2cd2b7e677cf335563c62b7430218e13457b9617ae068cb83bb09b6b98e9a528e806de6e3d1be1fd93f04c8eaa16bd74d2d3c573d5e5d3b5a0beae68a3c4b97872",
+        "name": "a real payload, with a right tag"
       },
       {
         "error": "Malformed",
@@ -326,8 +340,13 @@
       },
       {
         "error": "Malformed",
-        "message": "def26bc58f8fa13827970d5959bf8e4d9cf1f6646051857ae3718cba9e71edf6bbcfd735a2e102163e7176c3a1bebf31709766d72a84904a5666444b0a405218",
+        "message": "dff26bc58f8fa13827970d5959bf8e4d9cf1f6646051857ae3718cba9e71edf68ebd40141167251834ec1cfa81c615ae8fcf8f2daf2277f6b1a211d99a26c3c1",
         "name": "a static key not reduced, with a right tag"
+      },
+      {
+        "error": "Malformed",
+        "message": "4b4304a1ce0fa0831c0d5086a53d113c80569e488157087563fafa69d1792d9a0718baec9c03a2d0cbff8131f818be846a66a993fa8bb2f7666c279b6d6e4ea1a9",
+        "name": "a real payload, with a right tag"
       },
       {
         "error": "Malformed",

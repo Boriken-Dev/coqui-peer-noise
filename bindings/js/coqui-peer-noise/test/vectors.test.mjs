@@ -8,6 +8,8 @@ import {createInitiator, createResponder, importIdentity, PROFILE, PROTOCOL_NAME
 import {keyPairOf, toHex, unhex} from './support.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('../../../../tests/vectors/session.json', import.meta.url)));
+// What the vectors call each refusal, as this implementation words it.
+const refusal = {Malformed: /Invalid peer message/, BadProof: /does not decrypt/};
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const longMessage = Uint8Array.from({length: vectors.longRecord.length}, (_, index) => index % vectors.longRecord.modulo);
 
@@ -112,10 +114,17 @@ test('a binding reaches the vector messages and id', async () => {
   await r.accept(reply);
 });
 
+test('a well-made record after the peer\'s close is refused', async () => {
+  const {atResponder} = await run();
+  assert.equal(await atResponder.open(unhex(vectors.afterClose.close)), null);
+  await assert.rejects(() => atResponder.open(unhex(vectors.afterClose.data)), /session is over/);
+  assert.throws(() => atResponder.verifyEnd(), /session is over/);
+});
+
 for (const entry of vectors.refused.first) {
   test(`first message refused: ${entry.name}`, async () => {
     const r = await responder();
-    await assert.rejects(() => r.challenge(unhex(entry.message)));
+    await assert.rejects(() => r.challenge(unhex(entry.message)), refusal[entry.error]);
     await assert.rejects(() => r.challenge(unhex(vectors.messages[0])), /Unexpected/);
   });
 }
@@ -124,7 +133,7 @@ for (const entry of vectors.refused.second) {
   test(`second message refused: ${entry.name}`, async () => {
     const i = await initiator();
     await i.hello();
-    await assert.rejects(() => i.answer(unhex(entry.message)));
+    await assert.rejects(() => i.answer(unhex(entry.message)), refusal[entry.error]);
     await assert.rejects(() => i.answer(unhex(vectors.messages[1])), /Unexpected/);
   });
 }
@@ -133,7 +142,7 @@ for (const entry of vectors.refused.third) {
   test(`third message refused: ${entry.name}`, async () => {
     const r = await responder();
     await r.challenge(unhex(vectors.messages[0]));
-    await assert.rejects(() => r.accept(unhex(entry.message)));
+    await assert.rejects(() => r.accept(unhex(entry.message)), refusal[entry.error]);
     await assert.rejects(() => r.accept(unhex(vectors.messages[2])), /Unexpected/);
   });
 }
@@ -141,7 +150,7 @@ for (const entry of vectors.refused.third) {
 for (const entry of vectors.refused.records) {
   test(`record refused, and the session ends: ${entry.name}`, async () => {
     const {atInitiator, atResponder} = await run();
-    await assert.rejects(() => atResponder.open(unhex(entry.record)));
+    await assert.rejects(() => atResponder.open(unhex(entry.record)), /does not open/);
     const genuine = await atInitiator.seal('after it');
     await assert.rejects(() => atResponder.open(genuine), /session is over/);
     await assert.rejects(() => atResponder.seal('reply'), /session is over/);
