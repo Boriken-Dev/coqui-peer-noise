@@ -92,9 +92,10 @@ What A gains:
   the corresponding private keys are possessed", and leaves it to the application to decide whether the key
   is acceptable, by pins or certificates or key continuity. That is a `TrustStore`. B adds a signature layer
   outside what section 7.7 describes.
-- **No signature, so no transferable evidence.** libp2p's signature covers the static key alone, is not
-  tied to a run, and anyone holding it can show it. A method without one leaves no evidence that a third
-  party can verify, unlike `coqui-peer-webcrypto`'s signatures.
+- **No signature to show.** libp2p's signature covers the static key alone, is not tied to a run, and anyone
+  holding it can show it. This method signs nothing, so a transcript holds no signature for a third party to
+  verify, unlike `coqui-peer-webcrypto`'s. That is all that is claimed here: no formal deniability result was
+  read.
 - **One key to hold.** In a browser a non-extractable X25519 key, with no second key type whose own
   availability would also limit the method.
 
@@ -103,9 +104,9 @@ What A costs:
 - **A static key is the identity for as long as it lives.** With B, a static key can be replaced without
   changing the id. Here that is a rotation: `TrustStore::announce_successor`, then proving the successor,
   which `Trust::Store` promotes.
-- **Moving an endpoint from `coqui-peer-webcrypto` means a new id.** The rule of `docs/browser.md` in coqui-acp is that a key that
-  changes is a new agent, whose grants do not carry over. The store's successor mechanism takes a
-  `KeyMaterial` of any method, so a peer proved under `webcrypto` can announce its `noise` key, and
+- **Moving an endpoint from `coqui-peer-webcrypto` means a new id.** The rule of `docs/browser.md` in coqui-acp
+  is that a key that changes is a new agent, whose grants do not carry over. The store's successor mechanism
+  takes a `KeyMaterial` of any method, so a peer proved under `webcrypto` can announce its `noise` key, and
   `tests/handshake.rs` runs the second half of that. Whether a host offers it is the host's choice.
 - **A key that cannot sign.** A use that needs a signature needs another key.
 
@@ -122,9 +123,9 @@ What A costs:
   not this key. A responder records a stranger as waiting only after the proof, per its pairing contract.
 - **Pairing.** `coqui_peer::pair`'s `Channel` wants `local` and `remote` as `KeyMaterial` and a `binding`, and
   this gives them: the proved key and an export. Running it inside a session is not in this version.
-- **`.acp`.** `docs/browser.md` in coqui-acp has `AcpIdentity { peer, verified, method }`, with `method` as "any proof's name, not a
-  fixed list": `peer` is the id above, `method` is `noise`. `verified` may be true, since "every message after
-  the proof is protected by keys that came out of it".
+- **`.acp`.** `docs/browser.md` in coqui-acp has `AcpIdentity { peer, verified, method }`, with `method` as "any
+  proof's name, not a fixed list": `peer` is the id above, `method` is `noise`. `verified` may be true, since
+  "every message after the proof is protected by keys that came out of it".
 
 Each encoding is the only one: a key whose top bit is set, or at or above p, is refused. RFC 7748 section 5
 has X25519 mask that bit and reduce modulo p, so without this one private key would answer to several
