@@ -332,8 +332,9 @@ impl PairingSession {
     /// the desk's. When either runs out the joiner is told, and this is
     /// `Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. A time already spent is expired
     /// at once, with nothing read. These bounds hold against a slow peer only if a whole `recv` obeys
-    /// the timeout, as [`FramedStream`](crate::FramedStream)'s does. This sets the transport's read
-    /// timeout, and leaves it at what it last needed.
+    /// the timeout, as [`FramedStream`](crate::FramedStream)'s does. `coqui_peer::drive_messages_until`
+    /// clears the timeout it used, so set a timeout of your own after the handshake. This sets the
+    /// transport's read timeout, and leaves it at what it last needed.
     ///
     /// # Errors
     ///

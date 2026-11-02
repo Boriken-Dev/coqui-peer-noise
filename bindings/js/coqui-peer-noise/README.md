@@ -4,7 +4,9 @@ The Noise method of [coqui-peer](https://github.com/Boriken-Dev/coqui-peer), in 
 `Noise_XX_25519_AESGCM_SHA256`, prove their X25519 keys to each other and end up with an encrypted session, with no
 dependency and a private key that cannot leave WebCrypto. It interoperates with the
 [Rust crate](https://github.com/Boriken-Dev/coqui-peer-noise) in both roles, and works behind a TLS-terminating reverse
-proxy, because it uses nothing of the connection beneath it.
+proxy, because it uses nothing of the connection beneath it. A proxy that also serves the page can replace this module or use
+its key, so a hosted page gets no protection from that proxy; an extension, a packaged app, or a page whose code and pinned id
+come from elsewhere does.
 
 Not independently reviewed. `AGENTS.md` here is the API, and
 [PROTOCOL.md](https://github.com/Boriken-Dev/coqui-peer-noise/blob/main/PROTOCOL.md) the wire and what a relay can and
