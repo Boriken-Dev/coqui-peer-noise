@@ -6,7 +6,8 @@ import {runInNewContext} from 'node:vm';
 import {setFlagsFromString} from 'node:v8';
 import {webcrypto} from 'node:crypto';
 import {
-  __testing, createInitiator, createResponder, DEFAULT_KEY_LIMIT, generateIdentity,
+  __testing, createInitiator, createPairingInitiator, createPairingResponder, createResponder,
+  DEFAULT_KEY_LIMIT, generateIdentity,
 } from '../src/index.mjs';
 import {asIs, parties, sessions, through} from './support.mjs';
 
@@ -204,6 +205,42 @@ test('a binding must be bytes, not something that turns into other bytes or none
   for (const binding of ['text', new ArrayBuffer(3), new DataView(new ArrayBuffer(3)), 7, null]) {
     await assert.rejects(() => createInitiator(client, server.peerId, {binding}), /binding must be/);
   }
+});
+
+test('a binding is read when the call is made: a caller wiping it on return still binds to it', async () => {
+  const client = await generateIdentity();
+  const server = await generateIdentity();
+  const allow = async id => id === client.peerId;
+  const wiped = bytes => {
+    const buffer = Uint8Array.of(...bytes);
+    return {buffer, done: () => buffer.fill(0)};
+  };
+  const [one, two] = [wiped([1, 2, 3]), wiped([4, 5, 6])];
+  const starting = createInitiator(client, server.peerId, {binding: one.buffer});
+  one.done();
+  const answering = createResponder(server, {allowClient: allow, binding: two.buffer});
+  two.done();
+  const [i, r] = await Promise.all([starting, answering]);
+  await assert.rejects(async () => i.answer(await r.challenge(await i.hello())), /does not decrypt/);
+
+  // The same for what only pairs, whose handshake has the same two sides.
+  const [three, four] = [wiped([7]), wiped([8])];
+  const pairingStart = createPairingInitiator(client, {binding: three.buffer});
+  three.done();
+  const pairingAnswer = createPairingResponder(server, {binding: four.buffer});
+  four.done();
+  const [near, far] = await Promise.all([pairingStart, pairingAnswer]);
+  await assert.rejects(async () => near.answer(await far.challenge(await near.hello())), /does not decrypt/);
+
+  // Wiped, the same value at both ends still finishes: what counts is what was there at the call.
+  const [five, six] = [wiped([9]), wiped([9])];
+  const same = createInitiator(client, server.peerId, {binding: five.buffer});
+  five.done();
+  const other = createResponder(server, {allowClient: allow, binding: six.buffer});
+  six.done();
+  const [a, b] = await Promise.all([same, other]);
+  const {reply} = await a.answer(await b.challenge(await a.hello()));
+  await b.accept(reply);
 });
 
 test('a relay cutting at each record boundary is reported as truncation', async () => {

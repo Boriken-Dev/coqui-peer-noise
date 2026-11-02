@@ -517,6 +517,7 @@ async function createSession(transport, initiator, settings) {
   });
 }
 
+/** The settings, read now: each caller takes them before its first `await`, so it may reuse its buffers on return. */
 function options({keyLimit = DEFAULT_KEY_LIMIT, rekey = true, binding = new Uint8Array(), ephemeral} = {}) {
   if (!Number.isSafeInteger(keyLimit) || keyLimit < 0) throw new Error('keyLimit must be a whole number');
   if (typeof rekey !== 'boolean') throw new TypeError('rekey must be true or false');
@@ -590,8 +591,7 @@ export async function importIdentity(pkcs8) {
 }
 
 /** The dialling side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
-async function dialling(local, config, admit, finish) {
-  const settings = options(config);
+async function dialling(local, settings, admit, finish) {
   const handshake = await newHandshake(true, prologueOf(settings), local, await newEphemeral(settings));
   let state = 'start';
   return Object.freeze({
@@ -626,8 +626,7 @@ async function dialling(local, config, admit, finish) {
 }
 
 /** The accepting side's state machine; `admit` decides on the proved id, and `finish` gives the result. */
-async function accepting(local, config, admit, finish) {
-  const settings = options(config);
+async function accepting(local, settings, admit, finish) {
   let state = 'first';
   let handshake;
   return Object.freeze({
@@ -678,9 +677,10 @@ async function accepting(local, config, admit, finish) {
  * generator, for test vectors only.
  */
 export async function createInitiator(identity, expectedPeerId, config) {
+  const settings = options(config);
   const local = await checkIdentity(identity);
   if (!PEER_ID.test(expectedPeerId ?? '')) throw new Error('A pinned responder id is required');
-  return dialling(local, config, async id => {
+  return dialling(local, settings, async id => {
     if (id !== expectedPeerId) throw new Error('Responder is not pinned');
   }, async session => ({session}));
 }
@@ -690,9 +690,10 @@ export async function createInitiator(identity, expectedPeerId, config) {
  * key and must resolve to exactly `true` to admit it. Other options as for `createInitiator`.
  */
 export async function createResponder(identity, {allowClient, ...config} = {}) {
+  const settings = options(config);
   const local = await checkIdentity(identity);
   if (typeof allowClient !== 'function') throw new Error('An explicit trust decision is required');
-  return accepting(local, config, async id => {
+  return accepting(local, settings, async id => {
     if (await allowClient(id) !== true) throw new Error('Client is not paired');
   }, async session => ({session}));
 }
@@ -1211,9 +1212,10 @@ function pairingSessionOf(session, local, remote, verified, random, firstMessage
  * `createInitiator`, and `random` as for `createPairingDesk`. `answer` gives a `pairing` and no session.
  */
 export async function createPairingInitiator(identity, {responder, random = OS_RANDOM, ...config} = {}) {
+  const settings = options(config);
   const local = await checkIdentity(identity);
   if (responder !== undefined && !PEER_ID.test(responder)) throw new Error('A pinned responder id is required');
-  return dialling(local, config, async id => {
+  return dialling(local, settings, async id => {
     if (responder !== undefined && id !== responder) throw new Error('Responder is not pinned');
   }, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, responder !== undefined, random),
@@ -1231,8 +1233,9 @@ export async function createPairingResponder(identity, {firstMessageTimeout = DE
   if (typeof firstMessageTimeout !== 'number' || !(firstMessageTimeout >= 0)) {
     throw new Error('A firstMessageTimeout of that kind has no meaning');
   }
+  const settings = options(config);
   const local = await checkIdentity(identity);
-  return accepting(local, config, async () => {}, async (session, remote) => ({
+  return accepting(local, settings, async () => {}, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM, firstMessageTimeout),
   }));
 }
