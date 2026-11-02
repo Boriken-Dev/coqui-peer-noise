@@ -27,6 +27,8 @@ TLS-terminating reverse proxy, and such a proxy can connect the two peers and no
   the connection cannot read or change what goes through it, or end it unseen.
 - **Trust from `coqui-peer`**: fixed pins, or a live `TrustStore` read at each handshake, with waiting entries for
   proved strangers and rotation to a proved successor.
+- **Pairing on a session of its own**: two strangers prove keys and run a PIN exchange sealed in the session, bound to it and
+  not to any TLS, and from then on the key is what the handshake proves. That session carries nothing else.
 - **Both roles in both languages**: Rust here, and a dependency-free JavaScript module in
   [`bindings/js/coqui-peer-noise`](https://github.com/Boriken-Dev/coqui-peer-noise/tree/main/bindings/js/coqui-peer-noise)
   over `crypto.subtle` with a non-extractable key, tested against each other, in a real browser, against `snow`
@@ -39,7 +41,11 @@ cargo add --git https://github.com/Boriken-Dev/coqui-peer-noise --rev <commit> c
 ```
 
 This crate names `coqui-peer` by git revision too. A consumer that uses `coqui-peer` directly names the
-same revision, as `Cargo.toml` here does, so both see one `PeerId` type. It has no Cargo features.
+same revision, as `Cargo.toml` here does, so both see one `PeerId` type.
+
+| Feature | Enables | What | Default |
+| --- | --- | --- | --- |
+| `pin` | `coqui-peer/pin` (SPAKE2, HKDF, HMAC) | PIN pairing (`pair::Pairing::pin`) | off |
 
 Rust 1.89 or later. A build depends on `coqui-peer`, `x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`,
 `data-encoding`, `getrandom` and `zeroize`.
@@ -103,11 +109,13 @@ Everything is at the crate root.
 | `Trust` | whom a role admits: fixed pins, or a `TrustStore` |
 | `Session`, `Sealer`, `Opener` | records, the close, the limit, exports |
 | `FramedStream` | a byte stream as messages, refused by declared length before the body is read |
+| `PairingMethod`, `PairingHandshake`, `PairingSession`, `PairDial` | a stranger's handshake, and the sealed pairing drivers it ends in |
+| `pair` | `coqui_peer::pair`, which runs on a `PairingSession` |
 
 ## Wire protocol
 
-[PROTOCOL.md](https://github.com/Boriken-Dev/coqui-peer-noise/blob/main/PROTOCOL.md) says what this is, how a key
-becomes an id, what a relay can and cannot do, and what is not covered.
+[PROTOCOL.md](https://github.com/Boriken-Dev/coqui-peer-noise/blob/main/PROTOCOL.md) says what this is, which parts are
+ours and unanalysed, how a key becomes an id, what a relay can and cannot do, and what is not covered.
 
 ## Development
 
@@ -120,8 +128,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 cd bindings/js/coqui-peer-noise && npm test
 ```
 
-`npm test` includes the Rust example in both roles and a real browser, which skip with a message where cargo or a
-browser is absent. `COQUI_PEER_NOISE_REQUIRE_PEERS=1` makes that a failure.
+`npm test` includes the Rust examples in both roles and a real browser, which skip with a message where cargo or a
+browser is absent. `COQUI_PEER_NOISE_REQUIRE_PEERS=1` makes that a failure. A run through a real nginx is by hand:
+[`tools/proxy-run`](https://github.com/Boriken-Dev/coqui-peer-noise/tree/main/tools/proxy-run).
 
 ### Releasing
 
