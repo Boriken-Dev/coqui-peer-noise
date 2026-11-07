@@ -9,8 +9,8 @@ use coqui_peer::pair::{
     PairingResponder, Shown,
 };
 use coqui_peer::{
-    Established, Framing, Handshake, KeyMaterial, MessageTransport, Method, PeerId, Random,
-    TrustStore, Weakening,
+    Established, Framing, Handshake, KeyMaterial, MessageTransport, Method, NonDefault, PeerId,
+    Random, TrustStore,
 };
 
 use crate::error::Error;
@@ -76,7 +76,7 @@ impl PairingMethod {
     /// the transport still applies if it is shorter. [`DEFAULT_FIRST_MESSAGE_TIMEOUT`] by default, and
     /// no floor: zero refuses as expired without reading. `None` leaves the transport's own timeout as
     /// the only bound, and over a transport with none a silent stranger holds it until it closes.
-    /// Anything above the default is reported by [`weakened`](PairingMethod::weakened).
+    /// Anything above the default is reported by [`non_defaults`](PairingMethod::non_defaults).
     #[must_use]
     pub const fn with_first_message_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.first_message_timeout = timeout;
@@ -111,21 +111,28 @@ impl PairingMethod {
         self.noise.identity()
     }
 
-    /// The settings looser than their strict default. A responder here always admits any proved
-    /// key, so that is always listed.
+    /// The settings looser than their default. A pairing method admits any proved key by
+    /// definition, so that is not listed.
     #[must_use]
-    pub fn weakened(&self) -> Vec<Weakening> {
-        let mut weakened = self.noise.weakened();
-        let strict = DEFAULT_FIRST_MESSAGE_TIMEOUT.as_secs().to_string();
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
+        let mut non_defaults = self.noise.non_defaults();
+        let default = DEFAULT_FIRST_MESSAGE_TIMEOUT.as_secs().to_string();
         match self.first_message_timeout {
-            None => weakened.push(Weakening::new("first_message_timeout", "none", strict)),
+            None => non_defaults.push(NonDefault::new("first_message_timeout", "none", default)),
             Some(timeout) if timeout > DEFAULT_FIRST_MESSAGE_TIMEOUT => {
                 let value = timeout.as_secs().to_string();
-                weakened.push(Weakening::new("first_message_timeout", value, strict));
+                non_defaults.push(NonDefault::new("first_message_timeout", value, default));
             }
             Some(_) => {}
         }
-        weakened
+        non_defaults
+    }
+
+    /// The old name of [`non_defaults`](Self::non_defaults).
+    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
+    #[must_use]
+    pub fn weakened(&self) -> Vec<NonDefault> {
+        self.non_defaults()
     }
 }
 
