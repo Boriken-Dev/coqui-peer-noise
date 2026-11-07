@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: a weakened setting is a non-default setting.** `Noise::weakened` and `PairingMethod::weakened` are
+  `non_defaults`, returning coqui-peer's `NonDefault { setting, value, default }`; the old methods and the
+  `Weakening` re-export stay one release as deprecated aliases. In the JavaScript module `weakened()` is
+  `nonDefaults()` and its entries are `{setting, value, default}`; `weakened()` stays one release as an alias that
+  returns the same entries.
+
+### Removed
+
+- **Breaking:** the always-on `initiators` and `responders` = `any-with-key-proof` entries of a pairing method, in Rust
+  and JavaScript: admitting any proved key is what a pairing method is, not a setting left off its default.
+
 ### Added
 
 - `Noise` and `NoiseHandshake`: the `coqui_peer::Method` named `noise`, as initiator and responder, running
