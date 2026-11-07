@@ -276,7 +276,7 @@ both ends or not at all.
 tag's counter and GHASH's length block. RFC 8446 section 5.5 gives AES-GCM 2^24.5 full-size records (2^38.5
 bytes) for a margin of about 2^-57. Noise section 14 says no more than 2^56 bytes, and section 15.1 gives the
 margin behind that as less than one in a million, against a random guess at a 2^56-byte plaintext. The stricter
-number is the default, and a host above it gets it listed by `weakened()`.
+number is the default, and a host above it gets it listed by `non_defaults()`.
 
 **The key change.** With rekey on, when the next Noise message would pass the limit, the sender first sends a
 key change under the current key, applies section 4.2's `REKEY(k)`, and carries on under the new key, in the same

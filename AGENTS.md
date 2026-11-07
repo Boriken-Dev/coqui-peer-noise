@@ -15,7 +15,7 @@ of `coqui-peer` (`PeerId`, `TrustStore`, the sans-IO `Handshake`); its API heade
 `PROTOCOL.md` ships here and is the wire.
 
 Imports: everything is at the crate root, including re-exports of `coqui-peer`'s `Established`,
-`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore`, `Weakening` and `pair`.
+`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore`, `NonDefault` and `pair`; `Weakening` is a deprecated alias of `NonDefault` for one release.
 
 No `unsafe` code (`#![forbid(unsafe_code)]`), no process-wide state. Nothing reads a file or an
 environment variable unless the caller names a path. Ephemeral and long-term keys, every chaining key, the export
@@ -87,7 +87,7 @@ impl Noise {
     pub fn with_rekey(self, rekey: bool) -> Noise;           // change key at the limit; on by default
     pub fn with_random(self, random: Random) -> Noise;       // secure, or for test vectors only
     pub fn identity(&self) -> &Identity;
-    pub fn weakened(&self) -> Vec<Weakening>;  // a replaced random; a larger limit; rekey off
+    pub fn non_defaults(&self) -> Vec<NonDefault>;  // a replaced random; a larger limit; rekey off; weakened(): deprecated alias for one release
 }
 impl coqui_peer::Method for Noise { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct NoiseHandshake;
@@ -193,7 +193,7 @@ impl PairingMethod {
     pub fn with_rekey(self, rekey: bool) -> PairingMethod;
     pub fn with_random(self, random: Random) -> PairingMethod;
     pub fn identity(&self) -> &Identity;
-    pub fn weakened(&self) -> Vec<Weakening>;                    // always any-with-key-proof for initiators
+    pub fn non_defaults(&self) -> Vec<NonDefault>;    // a replaced random; a larger limit; rekey off; a first-message timeout above its default (admitting any proved key is what pairing is, not listed)
 }
 impl coqui_peer::Method for PairingMethod { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct PairingHandshake;  // impl Handshake { Output = PairingSession, Framing::Message }
