@@ -24,7 +24,7 @@ pin = ["coqui-peer/pin"]
 [dependencies]
 # The peer id, trust store and handshake this crate is a method of. The family has no releases for
 # now: its crates depend on each other by git revision.
-coqui-peer = { git = "https://github.com/Boriken-Dev/coqui-peer", rev = "1f00bfe6319f64e7ec038a7003746f4f031d538c" }
+coqui-peer = { git = "https://github.com/Boriken-Dev/coqui-peer", rev = "b6aa1f47ca956578ffcd20f936c43e8663ed059a" }
 # The DH function, zeroed on drop. The 2.x line shares curve25519-dalek 4 and rand_core 0.6 with
 # coqui-peer's `pin` feature, so one build compiles one of each.
 x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets", "zeroize"] }
