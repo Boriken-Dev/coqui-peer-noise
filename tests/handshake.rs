@@ -219,13 +219,13 @@ fn a_failing_source_gives_an_error_and_not_a_panic() {
 fn looser_settings_are_reported() {
     let identity = Identity::generate().unwrap();
     let plain = Noise::new(identity);
-    assert!(plain.weakened().is_empty());
-    assert!(plain.clone().with_key_limit(1).weakened().is_empty());
+    assert!(plain.non_defaults().is_empty());
+    assert!(plain.clone().with_key_limit(1).non_defaults().is_empty());
     let names = |method: Noise| {
         method
-            .weakened()
+            .non_defaults()
             .into_iter()
-            .map(|weakening| weakening.setting)
+            .map(|non_default| non_default.setting)
             .collect::<Vec<_>>()
     };
     assert_eq!(

@@ -3,7 +3,7 @@ use alloc::sync::Arc;
 use core::fmt;
 use core::net::SocketAddr;
 
-use coqui_peer::{Established, Framing, Handshake, KeyMaterial, Method, Random, Weakening};
+use coqui_peer::{Established, Framing, Handshake, KeyMaterial, Method, NonDefault, Random};
 use x25519_dalek::StaticSecret;
 use zeroize::Zeroizing;
 
@@ -155,7 +155,7 @@ impl Noise {
 
     /// Where ephemeral keys come from; the operating system by default. It must be cryptographically
     /// secure: section 14 of the Noise specification calls a reused ephemeral key catastrophic. A
-    /// fixed source is for test vectors. It is reported by [`weakened`](Noise::weakened).
+    /// fixed source is for test vectors. It is reported by [`non_defaults`](Noise::non_defaults).
     #[must_use]
     pub fn with_random(mut self, random: Random) -> Self {
         let config = Arc::make_mut(&mut self.0);
@@ -170,37 +170,32 @@ impl Noise {
         &self.0.identity
     }
 
-    /// The settings looser than their strict default.
+    /// The settings looser than their default.
     #[must_use]
-    pub fn weakened(&self) -> Vec<Weakening> {
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
         let config = &self.0;
-        let mut weakened = Vec::new();
-        for (setting, admit) in [
-            ("responders", &config.responders),
-            ("initiators", &config.initiators),
-        ] {
-            if matches!(admit, Some(Admit::Any)) {
-                weakened.push(Weakening::new(
-                    setting,
-                    "any-with-key-proof",
-                    "pinned or store",
-                ));
-            }
-        }
+        let mut non_defaults = Vec::new();
         if config.key_limit > DEFAULT_KEY_LIMIT {
-            weakened.push(Weakening::new(
+            non_defaults.push(NonDefault::new(
                 "key_limit",
                 config.key_limit.to_string(),
                 DEFAULT_KEY_LIMIT.to_string(),
             ));
         }
         if !config.rekey {
-            weakened.push(Weakening::new("rekey", "off", "on"));
+            non_defaults.push(NonDefault::new("rekey", "off", "on"));
         }
         if config.random_replaced {
-            weakened.push(Weakening::new("random", "caller's", "operating system's"));
+            non_defaults.push(NonDefault::new("random", "caller's", "operating system's"));
         }
-        weakened
+        non_defaults
+    }
+
+    /// The old name of [`non_defaults`](Self::non_defaults).
+    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
+    #[must_use]
+    pub fn weakened(&self) -> Vec<NonDefault> {
+        self.non_defaults()
     }
 }
 

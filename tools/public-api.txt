@@ -3,6 +3,7 @@ pub use coqui_peer_noise::Established
 pub use coqui_peer_noise::KeyMaterial
 pub use coqui_peer_noise::MessageTransport
 pub use coqui_peer_noise::Method
+pub use coqui_peer_noise::NonDefault
 pub use coqui_peer_noise::PeerId
 pub use coqui_peer_noise::Random
 pub use coqui_peer_noise::TrustStore
@@ -70,7 +71,8 @@ pub struct coqui_peer_noise::Noise(_)
 impl coqui_peer_noise::Noise
 pub fn coqui_peer_noise::Noise::identity(&self) -> &coqui_peer_noise::Identity
 pub fn coqui_peer_noise::Noise::new(coqui_peer_noise::Identity) -> Self
-pub fn coqui_peer_noise::Noise::weakened(&self) -> alloc::vec::Vec<coqui_peer::weakening::Weakening>
+pub fn coqui_peer_noise::Noise::non_defaults(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
+pub fn coqui_peer_noise::Noise::weakened(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
 pub fn coqui_peer_noise::Noise::with_initiators(self, coqui_peer_noise::Trust) -> Self
 pub fn coqui_peer_noise::Noise::with_key_limit(self, u64) -> Self
 pub fn coqui_peer_noise::Noise::with_random(self, coqui_peer::random::Random) -> Self
@@ -123,7 +125,8 @@ pub struct coqui_peer_noise::PairingMethod
 impl coqui_peer_noise::PairingMethod
 pub fn coqui_peer_noise::PairingMethod::identity(&self) -> &coqui_peer_noise::Identity
 pub fn coqui_peer_noise::PairingMethod::new(coqui_peer_noise::Identity) -> Self
-pub fn coqui_peer_noise::PairingMethod::weakened(&self) -> alloc::vec::Vec<coqui_peer::weakening::Weakening>
+pub fn coqui_peer_noise::PairingMethod::non_defaults(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
+pub fn coqui_peer_noise::PairingMethod::weakened(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
 pub const fn coqui_peer_noise::PairingMethod::with_first_message_timeout(self, core::option::Option<core::time::Duration>) -> Self
 pub fn coqui_peer_noise::PairingMethod::with_key_limit(self, u64) -> Self
 pub fn coqui_peer_noise::PairingMethod::with_random(self, coqui_peer::random::Random) -> Self
@@ -176,3 +179,4 @@ pub fn coqui_peer_noise::CurrentReadTimeout::current_read_timeout(&self) -> core
 impl<S: coqui_peer::drive::ReadTimeout> coqui_peer_noise::CurrentReadTimeout for coqui_peer_noise::FramedStream<S>
 pub fn coqui_peer_noise::FramedStream<S>::current_read_timeout(&self) -> core::option::Option<core::time::Duration>
 pub fn coqui_peer_noise::random() -> coqui_peer::random::Random
+pub const fn coqui_peer_noise::record_length(usize) -> usize

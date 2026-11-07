@@ -633,9 +633,9 @@ test('a record longer than any of the exchange is refused before it is opened, i
   await assert.rejects(pairing.respond(desk, fed(huge), {accept: async () => assert.fail('not accepted')}), /malformed/);
 });
 
-test('weakened() names each setting looser than its default, and nothing else', async () => {
+test('nonDefaults() names each setting looser than its default, and nothing else', async () => {
   const [a, b] = [await generateIdentity(), await generateIdentity()];
-  const names = object => object.weakened().map(({setting}) => setting);
+  const names = object => object.nonDefaults().map(({setting}) => setting);
   const replaced = async () => webcrypto.subtle.generateKey('X25519', false, ['deriveBits']);
   assert.deepEqual(names(await createInitiator(a, b.peerId)), []);
   assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: DEFAULT_KEY_LIMIT})), []);
@@ -644,25 +644,25 @@ test('weakened() names each setting looser than its default, and nothing else', 
   assert.deepEqual(names(await createInitiator(a, b.peerId, {rekey: false})), ['rekey']);
   assert.deepEqual(names(await createInitiator(a, b.peerId, {ephemeral: replaced})), ['ephemeral']);
   assert.deepEqual(names(await createResponder(b, {allowClient: async () => true, rekey: false})), ['rekey']);
-  assert.deepEqual((await createInitiator(a, b.peerId, {rekey: false})).weakened(), [{setting: 'rekey', value: 'off', strict: 'on'}]);
+  assert.deepEqual((await createInitiator(a, b.peerId, {rekey: false})).nonDefaults(), [{setting: 'rekey', value: 'off', default: 'on'}]);
 
-  // What only pairs says so, as Rust's does.
-  assert.deepEqual(names(await createPairingInitiator(a)), ['responders']);
+  // Admitting any proved key is what pairing is: it is not listed.
+  assert.deepEqual(names(await createPairingInitiator(a)), []);
   assert.deepEqual(names(await createPairingInitiator(a, {responder: b.peerId})), []);
   assert.deepEqual(names(await createPairingInitiator(a, {responder: b.peerId, random: () => new Uint8Array(64)})), ['random']);
-  assert.deepEqual(names(await createPairingResponder(b)), ['initiators']);
-  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: 0})), ['initiators']);
-  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: DEFAULT_FIRST_MESSAGE_TIMEOUT})), ['initiators']);
+  assert.deepEqual(names(await createPairingResponder(b)), []);
+  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: 0})), []);
+  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: DEFAULT_FIRST_MESSAGE_TIMEOUT})), []);
   assert.deepEqual(
     names(await createPairingResponder(b, {firstMessageTimeout: DEFAULT_FIRST_MESSAGE_TIMEOUT + 1, rekey: false})),
-    ['rekey', 'initiators', 'firstMessageTimeout'],
+    ['rekey', 'firstMessageTimeout'],
   );
 
   // The desk, by what a guess's chance and a PIN's life come to.
   assert.deepEqual(names(createPairingDesk()), []);
   assert.deepEqual(names(createPairingDesk({pinLength: 7, pinTtl: 1})), []);
   assert.deepEqual(names(createPairingDesk({pinLength: 1})), ['pinCombinations']);
-  assert.deepEqual(createPairingDesk({pinLength: 1}).weakened(), [{setting: 'pinCombinations', value: '10', strict: '1000000'}]);
+  assert.deepEqual(createPairingDesk({pinLength: 1}).nonDefaults(), [{setting: 'pinCombinations', value: '10', default: '1000000'}]);
   assert.deepEqual(names(createPairingDesk({pinAlphabet: '01'})), ['pinCombinations']);
   assert.deepEqual(names(createPairingDesk({pinAlphabet: '01', pinLength: 20})), []);
   assert.deepEqual(names(createPairingDesk({pinAttempts: 2})), ['pinAttempts']);
@@ -879,4 +879,13 @@ test('Rust\'s records of a wrong PIN are reproduced to the byte, in both roles, 
     {refusal: 'wrong-code'},
   );
   assert.deepEqual(responding.done(), {sent: 2, expected: 2});
+});
+
+test('weakened() is the old name of nonDefaults()', async () => {
+  const [a, b] = [await generateIdentity(), await generateIdentity()];
+  const initiator = await createInitiator(a, b.peerId, {rekey: false});
+  assert.deepEqual(initiator.weakened(), initiator.nonDefaults());
+  const desk = createPairingDesk({pinLength: 1});
+  assert.deepEqual(desk.weakened(), desk.nonDefaults());
+  assert.equal(desk.weakened().length, 1);
 });

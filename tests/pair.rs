@@ -166,9 +166,8 @@ fn a_pairing_session_holds_a_key_and_is_nobody() {
     assert_eq!(at_joiner.local, joiner.key_material());
     assert_eq!(at_joiner.remote, Some(responder.key_material()));
     let method = PairingMethod::new(joiner);
-    for setting in ["initiators", "responders"] {
-        assert!(method.weakened().iter().any(|w| w.setting == setting));
-    }
+    // Admitting any proved key is what a pairing method is, so it is not a non-default setting.
+    assert!(method.non_defaults().is_empty());
     // `PairingSession` has no `seal` or `open`, and `Trust` has no way to admit a stranger: the
     // doctests on both are `compile_fail`.
 }
@@ -1265,9 +1264,9 @@ fn what_is_looser_than_the_first_message_default_is_reported() {
     let method = || PairingMethod::new(Identity::generate().unwrap());
     let listed = |method: &PairingMethod| {
         method
-            .weakened()
+            .non_defaults()
             .iter()
-            .any(|weakening| weakening.setting == "first_message_timeout")
+            .any(|non_default| non_default.setting == "first_message_timeout")
     };
     assert!(!listed(&method()));
     assert!(!listed(
@@ -1366,4 +1365,13 @@ fn reads_that_time_out_at_once_end_the_exchange_after_a_few_whatever_time_is_lef
         assert!(!world.store.is_accepted(&joiner.peer_id()));
         drop(a);
     }
+}
+
+#[test]
+#[allow(deprecated)]
+fn the_old_name_answers_the_new_one() {
+    let method = PairingMethod::new(Identity::generate().unwrap())
+        .with_first_message_timeout(Some(core::time::Duration::from_secs(3600)));
+    assert_eq!(method.weakened(), method.non_defaults());
+    assert!(!method.weakened().is_empty());
 }

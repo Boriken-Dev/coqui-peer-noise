@@ -20,8 +20,11 @@ mod pairing;
 mod session;
 mod trust;
 
+#[allow(deprecated)]
+pub use coqui_peer::Weakening;
 pub use coqui_peer::{
-    Established, KeyMaterial, MessageTransport, Method, PeerId, Random, TrustStore, Weakening, pair,
+    Established, KeyMaterial, MessageTransport, Method, NonDefault, PeerId, Random, TrustStore,
+    pair,
 };
 pub use error::Error;
 pub use framed::{CurrentReadTimeout, FramedStream, MAX_HANDSHAKE_MESSAGE};
