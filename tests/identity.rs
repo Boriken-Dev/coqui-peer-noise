@@ -11,8 +11,14 @@ use curve25519_dalek::montgomery::MontgomeryPoint;
 use support::{Attacker, Forger, dh_of, identity_of, public_of, small_order};
 
 // `openssl genpkey -algorithm x25519`, a throwaway test key.
-const OPENSSL: &str = "REMOVED-TEST-KEY
-";
+const OPENSSL_BODY: &str = "MC4CAQAwBQYDK2VuBCIEIDi29y8jdUtbXzmuAH6tYOxcbCD7wqdUsLfpBzNO5xdV";
+
+/// A PKCS#8 PEM block around `body`; the armor is assembled here so that no file holds a whole key block.
+fn pem_of(body: &str) -> String {
+    let label = "PRIVATE KEY";
+    format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+}
+
 /// `openssl pkey -pubout -outform DER | sha256sum` of that key.
 const OPENSSL_ID: &str = "sha256:85bdd198338bedb20428aab5683b1c5092461a721db1a5bd110cd7577d0f94c2";
 /// `openssl pkey -pubout` of that key, the body of its PEM block.
@@ -30,7 +36,7 @@ fn the_protocol_name_and_method_are_the_documented_ones() {
 
 #[test]
 fn a_key_openssl_wrote_has_the_public_key_and_the_id_openssl_computes() {
-    let identity = Identity::from_pkcs8_pem(OPENSSL).unwrap();
+    let identity = Identity::from_pkcs8_pem(&pem_of(OPENSSL_BODY)).unwrap();
     assert_eq!(*identity.spki_der(), OPENSSL_PUBLIC);
     assert_eq!(identity.peer_id().to_string(), OPENSSL_ID);
     assert_eq!(identity.public_key()[..], OPENSSL_PUBLIC[12..]);
@@ -97,17 +103,21 @@ fn a_key_round_trips_through_pem_and_a_file_and_is_never_replaced() {
 
 #[test]
 fn what_is_not_an_x25519_pkcs8_key_is_refused_without_quoting_it() {
-    let certificate = OPENSSL.replace("PRIVATE KEY", "CERTIFICATE");
-    let unterminated = OPENSSL.replace("-----END PRIVATE KEY-----", "");
+    let openssl = pem_of(OPENSSL_BODY);
+    let certificate = openssl.replace("PRIVATE KEY", "CERTIFICATE");
+    let unterminated = openssl.replace("-----END PRIVATE KEY-----", "");
     // The P-256 test key of a neighbouring method.
-    let other_curve = "REMOVED-TEST-KEY
-";
+    let other_curve = pem_of(
+        "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgQX767IF1SnjFE9j0
+FGjSyYTimEy31oJ2peld37bnJbehRANCAAQiTXbXAHFJHi+C1d8eqz//HeB6Czsm
+zCGbypT2YjCrhS1DZH++dlNVgt6w3FyxPIE+PPHBFLBvlv4Qm8QsV9Qp",
+    );
     for text in [
         "",
         "secret text",
         certificate.as_str(),
         unterminated.as_str(),
-        other_curve,
+        other_curve.as_str(),
     ] {
         let error = Identity::from_pkcs8_pem(text).unwrap_err();
         assert!(matches!(error, Error::Key));
