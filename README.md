@@ -81,8 +81,8 @@ impl MessageTransport for Pipe {
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let (client, server) = (Identity::generate()?, Identity::generate()?);
-let dialing = Noise::new(client.clone()).with_responders(Trust::pinned([server.peer_id()]));
-let listening = Noise::new(server.clone()).with_initiators(Trust::pinned([client.peer_id()]));
+let dialing = Noise::builder(client.clone()).responders(Trust::pinned([server.peer_id()])).build();
+let listening = Noise::builder(server.clone()).initiators(Trust::pinned([client.peer_id()])).build();
 
 let ((to_server, at_server), (to_client, at_client)) = (channel(), channel());
 let serving = thread::spawn(move || {

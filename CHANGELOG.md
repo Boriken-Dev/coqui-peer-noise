@@ -9,11 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Breaking: a weakened setting is a non-default setting.** `Noise::weakened` and `PairingMethod::weakened` are
-  `non_defaults`, returning coqui-peer's `NonDefault { setting, value, default }`; the old methods and the
-  `Weakening` re-export stay one release as deprecated aliases. In the JavaScript module `weakened()` is
-  `nonDefaults()` and its entries are `{setting, value, default}`; `weakened()` stays one release as an alias that
-  returns the same entries.
+- **Breaking: a weakened setting is a non-default setting.** `Noise::non_defaults` and `PairingMethod::non_defaults` return coqui-peer's `NonDefault { setting, value, default }`,
+  one for every setting that differs from its default, named by key path (`key_limit`, `rekey`, `first_message_timeout`),
+  and `random` when it is replaced. In the JavaScript module `nonDefaults()` has the same entries.
 
 ### Removed
 
@@ -22,10 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Builders and settings.** `Noise::builder(identity)` and `PairingMethod::builder(identity)` set a method up by the
+  setting's name (`responders`, `initiators`, `key_limit`, `rekey`, `random`, `first_message_timeout`, `settings`), then
+  `build()`; there is no `new`. `NoiseSettings { key_limit, rekey }` and `PairingSettings` (those and
+  `first_message_timeout`, a duration where `Duration::MAX` leaves only the transport's own bound) are guatiao values a
+  file fills, and `settings(..)` takes one whole. `NoiseHandshake::binding` sets the outer-channel binding.
 - `Noise` and `NoiseHandshake`: the `coqui_peer::Method` named `noise`, as initiator and responder, running
   `Noise_XX_25519_AESGCM_SHA256` and ending in a `Session`.
 - `Session`, `Sealer`, `Opener`: Noise's handshake hash as an id both ends agree on, records of any length, `close`
-  and `verify_end` so a cut stream is reported as `Error::Truncated`, `with_key_limit` and `with_rekey` per key and
+  and `verify_end` so a cut stream is reported as `Error::Truncated`, `key_limit` and `rekey` per key and
   direction, and exports bound to their length.
 - `Identity`: an X25519 key in RFC 8410's PKCS#8, generated, read and written. The static key is the identity, and
   its id is the SHA-256 of its RFC 8410 public key.

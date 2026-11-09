@@ -6,8 +6,8 @@ the package and is self-contained. Development documentation lives with the sour
 <https://github.com/Boriken-Dev/coqui-peer-noise>.
 
 One Cargo feature, off by default: `pin`, which is `coqui-peer/pin` (SPAKE2, HKDF, HMAC), for `pair::Pairing::pin`.
-MSRV Rust 1.89. A build depends on `coqui-peer` (by git revision, `1f00bfe`),
-`x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`, `data-encoding`, `getrandom` and `zeroize`. This crate is
+MSRV Rust 1.89. A build depends on `coqui-peer` (by git revision, `e0f96b8`),
+`guatiao` (by revision), `x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`, `data-encoding`, `getrandom` and `zeroize`. This crate is
 unreleased, with one independent review by another AI agent (neither third-party nor formal) and no formal model
 of XX with SPAKE2 inside it: depend on a git revision, and name the same `coqui-peer`
 revision if you use it directly; the wire and API may change at any commit. This is the method named `noise`
@@ -67,7 +67,7 @@ Decided after the peer proved its key, never before.
 - There is no way to admit anyone here: a stranger's session is a `PairingSession`.
 
 How strangers wait is the store's: a source at `WaitingLimits::per_source` refuses a newcomer and keeps
-those waiting, and records one new peer per `TrustStore::with_record_interval`. A flood can fill a source;
+those waiting, and records one new peer per `TrustStoreBuilder::record_interval`. A flood can fill a source;
 it cannot remove anyone. Behind a reverse proxy every peer shares the proxy's source, unless the caller
 passes the client's address from a header it trusts.
 
@@ -80,19 +80,28 @@ pub const PROTOCOL_NAME: &str = "Noise_XX_25519_AESGCM_SHA256";
 pub fn random() -> Random;                    // the OS generator
 pub struct Noise;                             // Clone (shared); Debug shows no secret
 impl Noise {
-    pub fn new(identity: Identity) -> Noise;                 // neither role until a with_ below
-    pub fn with_responders(self, trust: Trust) -> Noise;     // whom initiate() admits
-    pub fn with_initiators(self, trust: Trust) -> Noise;     // whom respond() admits
-    pub fn with_key_limit(self, bytes: u64) -> Noise;        // per key, per direction; DEFAULT_KEY_LIMIT; no floor
-    pub fn with_rekey(self, rekey: bool) -> Noise;           // change key at the limit; on by default
-    pub fn with_random(self, random: Random) -> Noise;       // secure, or for test vectors only
+    pub fn builder(identity: Identity) -> NoiseBuilder;      // neither role until responders or initiators
     pub fn identity(&self) -> &Identity;
-    pub fn non_defaults(&self) -> Vec<NonDefault>;  // a replaced random; a larger limit; rekey off; weakened(): deprecated alias for one release
+    pub fn settings(&self) -> NoiseSettings;
+    pub fn non_defaults(&self) -> Vec<NonDefault>;  // every NoiseSettings key that differs, by key path (`key_limit`, `rekey`); `random` when replaced
 }
+// Setters, the last wins; build() -> Noise:
+pub struct NoiseBuilder;                      // Clone; Debug
+impl NoiseBuilder {
+    pub fn responders(self, trust: Trust) -> NoiseBuilder;  // whom initiate() admits
+    pub fn initiators(self, trust: Trust) -> NoiseBuilder;  // whom respond() admits
+    pub fn key_limit(self, bytes: u64) -> NoiseBuilder;     // per key, per direction; DEFAULT_KEY_LIMIT; no floor
+    pub fn rekey(self, rekey: bool) -> NoiseBuilder;        // change key at the limit; on by default
+    pub fn random(self, random: Random) -> NoiseBuilder;    // secure, or for test vectors only
+    pub fn settings(self, settings: NoiseSettings) -> NoiseBuilder;   // key_limit and rekey, whole
+    pub fn build(self) -> Noise;
+}
+// A guatiao value (ToValue, FromValue, Schema): every key optional, unknown keys refused.
+#[non_exhaustive] pub struct NoiseSettings { pub key_limit: u64, pub rekey: bool }   // Default: DEFAULT_KEY_LIMIT, true
 impl coqui_peer::Method for Noise { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct NoiseHandshake;
 impl NoiseHandshake {
-    pub fn with_binding(self, binding: &[u8]) -> Result<NoiseHandshake, Error>;   // Error::State once the prologue is fixed
+    pub fn binding(self, binding: &[u8]) -> Result<NoiseHandshake, Error>;   // Error::State once the prologue is fixed
 }
 pub const MAX_HANDSHAKE_MESSAGE: usize = 96;
 pub struct FramedStream<S>;                   // Debug
@@ -122,7 +131,7 @@ ephemeral key and the first `transmit` gives the first message; `Error::Unsuppor
 **An initiator finishes on sending the third message, and does not yet know it was accepted**: a responder that
 refuses it ends the connection. Records it sends meanwhile go only to the responder it proved.
 
-`with_binding` is for an endpoint that really ends a TLS connection itself: pass that connection's
+`binding` is for an endpoint that really ends a TLS connection itself: pass that connection's
 exporter at both ends, and a relay ending TLS on both sides fails with `Error::BadProof`. Never set it
 through a reverse proxy, where the two ends read different values. It is never sent. Set it before the first
 `transmit` or `receive`.
@@ -164,7 +173,7 @@ opened. Each direction closes on its own: after `close`, `seal` is `Error::Close
 Any failure to open ends the session in both directions, split or not: `Error::Record` on every later
 `open`, `seal` and `close`, and the caller closes the connection.
 
-**At `with_key_limit`, with rekey on**, the sender changes its key in the record that crosses the limit, and the
+**At `key_limit`, with rekey on**, the sender changes its key in the record that crosses the limit, and the
 stream goes on; nothing is asked of the caller, and the peer follows. A receiver refuses a sender above the larger of
 its own limit and `DEFAULT_KEY_LIMIT`: a lower limit is only this side's own sending, and a limit above the default is raised
 at both ends or not at all. A single Noise
@@ -186,15 +195,22 @@ pub const MAX_PAIRING_RECORD: usize = 350;    // the longest record of an exchan
 pub const DEFAULT_FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct PairingMethod;                     // Clone; Debug
 impl PairingMethod {
-    pub fn new(identity: Identity) -> PairingMethod;             // admits any proved key, in both roles
-    pub fn with_responders(self, trust: Trust) -> PairingMethod; // a joiner verifies the responder
-    pub const fn with_first_message_timeout(self, timeout: Option<Duration>) -> PairingMethod; // no floor
-    pub fn with_key_limit(self, bytes: u64) -> PairingMethod;
-    pub fn with_rekey(self, rekey: bool) -> PairingMethod;
-    pub fn with_random(self, random: Random) -> PairingMethod;
+    pub fn builder(identity: Identity) -> PairingMethodBuilder;   // admits any proved key, in both roles
     pub fn identity(&self) -> &Identity;
-    pub fn non_defaults(&self) -> Vec<NonDefault>;    // a replaced random; a larger limit; rekey off; a first-message timeout above its default (admitting any proved key is what pairing is, not listed)
+    pub fn settings(&self) -> PairingSettings;
+    pub fn non_defaults(&self) -> Vec<NonDefault>;    // every PairingSettings key that differs, by key path; `random` when replaced (admitting any proved key is what pairing is, not listed)
 }
+pub struct PairingMethodBuilder;              // Clone; Debug; build() -> PairingMethod
+impl PairingMethodBuilder {
+    pub fn responders(self, trust: Trust) -> PairingMethodBuilder;   // a joiner verifies the responder
+    pub fn first_message_timeout(self, timeout: Duration) -> PairingMethodBuilder;   // no floor; Duration::MAX leaves the transport'"'"'s own
+    pub fn key_limit(self, bytes: u64) -> PairingMethodBuilder;
+    pub fn rekey(self, rekey: bool) -> PairingMethodBuilder;
+    pub fn random(self, random: Random) -> PairingMethodBuilder;
+    pub fn settings(self, settings: PairingSettings) -> PairingMethodBuilder;
+}
+// As NoiseSettings, with `first_message_timeout: Duration` (a number of seconds in text); Default: DEFAULT_KEY_LIMIT, true, 60 s
+#[non_exhaustive] pub struct PairingSettings { pub key_limit: u64, pub rekey: bool, pub first_message_timeout: Duration }
 impl coqui_peer::Method for PairingMethod { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct PairingHandshake;  // impl Handshake { Output = PairingSession, Framing::Message }
 pub struct PairingSession;    // no seal, no open: it runs one exchange
@@ -222,8 +238,8 @@ as `Noise`'s, then `join` or `respond`, which seal every message and end with a 
 proves.
 
 **A stranger's time is bounded.** Before the joiner's first message `respond` waits for the smaller of the transport's
-`current_read_timeout` and `with_first_message_timeout`, `DEFAULT_FIRST_MESSAGE_TIMEOUT` unless set, zero refusing with
-nothing read and `None` leaving only the transport's own. So ask a person for the PIN before connecting, or raise this. From
+`current_read_timeout` and `first_message_timeout`, `DEFAULT_FIRST_MESSAGE_TIMEOUT` unless set, zero refusing with
+nothing read and `Duration::MAX` leaving only the transport's own. So ask a person for the PIN before connecting, or raise this. From
 that message each read waits until the desk's deadline. Either running out tells the joiner and returns
 `Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. Over a `FramedStream` the bound holds however slowly the bytes
 come; another transport must make a whole `recv` obey its timeout. `drive_messages_until` clears the timeout it used, so
@@ -238,8 +254,8 @@ transport lets through.
   spends the PIN: never join with it again, and get a new one.** A relay posing as the responder never reaches the real desk,
   so each run with the same PIN gives it a new guess. A host that retries by itself loses the PIN's guarantee.
 - **Invitation**: `join` refuses (`Error::Pairing(PairingError::Unverified)`) unless the proved key is the inviter's, before
-  anything is sent. Pin the inviter in `with_responders` too, to stop others at the handshake.
-- **Device flow**: `join` refuses unless `with_responders` verified the responder, or `Pairing::allow_unverified(true)`, which
+  anything is sent. Pin the inviter in `responders` too, to stop others at the handshake.
+- **Device flow**: `join` refuses unless `responders` verified the responder, or `Pairing::allow_unverified(true)`, which
   lets a relay pair in place of both sides.
 
 Over a `FramedStream`, the handshake's limit is `MAX_HANDSHAKE_MESSAGE`, and the exchange needs `set_max_message` with

@@ -7,7 +7,6 @@ pub use coqui_peer_noise::NonDefault
 pub use coqui_peer_noise::PeerId
 pub use coqui_peer_noise::Random
 pub use coqui_peer_noise::TrustStore
-pub use coqui_peer_noise::Weakening
 pub use coqui_peer_noise::pair
 #[non_exhaustive] pub enum coqui_peer_noise::Error
 pub coqui_peer_noise::Error::BadProof
@@ -69,15 +68,10 @@ impl core::fmt::Debug for coqui_peer_noise::Identity
 pub fn coqui_peer_noise::Identity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct coqui_peer_noise::Noise(_)
 impl coqui_peer_noise::Noise
+pub fn coqui_peer_noise::Noise::builder(coqui_peer_noise::Identity) -> coqui_peer_noise::NoiseBuilder
 pub fn coqui_peer_noise::Noise::identity(&self) -> &coqui_peer_noise::Identity
-pub fn coqui_peer_noise::Noise::new(coqui_peer_noise::Identity) -> Self
 pub fn coqui_peer_noise::Noise::non_defaults(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
-pub fn coqui_peer_noise::Noise::weakened(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
-pub fn coqui_peer_noise::Noise::with_initiators(self, coqui_peer_noise::Trust) -> Self
-pub fn coqui_peer_noise::Noise::with_key_limit(self, u64) -> Self
-pub fn coqui_peer_noise::Noise::with_random(self, coqui_peer::random::Random) -> Self
-pub fn coqui_peer_noise::Noise::with_rekey(self, bool) -> Self
-pub fn coqui_peer_noise::Noise::with_responders(self, coqui_peer_noise::Trust) -> Self
+pub fn coqui_peer_noise::Noise::settings(&self) -> coqui_peer_noise::NoiseSettings
 impl coqui_peer::method::Method for coqui_peer_noise::Noise
 pub type coqui_peer_noise::Noise::Handshake = coqui_peer_noise::NoiseHandshake
 pub fn coqui_peer_noise::Noise::initiate(&self) -> core::result::Result<coqui_peer_noise::NoiseHandshake, coqui_peer_noise::Error>
@@ -85,9 +79,18 @@ pub fn coqui_peer_noise::Noise::name(&self) -> &'static str
 pub fn coqui_peer_noise::Noise::respond(&self, core::option::Option<core::net::socket_addr::SocketAddr>) -> core::result::Result<coqui_peer_noise::NoiseHandshake, coqui_peer_noise::Error>
 impl core::fmt::Debug for coqui_peer_noise::Noise
 pub fn coqui_peer_noise::Noise::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct coqui_peer_noise::NoiseBuilder(_)
+impl coqui_peer_noise::NoiseBuilder
+pub fn coqui_peer_noise::NoiseBuilder::build(self) -> coqui_peer_noise::Noise
+pub fn coqui_peer_noise::NoiseBuilder::initiators(self, coqui_peer_noise::Trust) -> Self
+pub fn coqui_peer_noise::NoiseBuilder::key_limit(self, u64) -> Self
+pub fn coqui_peer_noise::NoiseBuilder::random(self, coqui_peer::random::Random) -> Self
+pub fn coqui_peer_noise::NoiseBuilder::rekey(self, bool) -> Self
+pub fn coqui_peer_noise::NoiseBuilder::responders(self, coqui_peer_noise::Trust) -> Self
+pub fn coqui_peer_noise::NoiseBuilder::settings(self, coqui_peer_noise::NoiseSettings) -> Self
 pub struct coqui_peer_noise::NoiseHandshake
 impl coqui_peer_noise::NoiseHandshake
-pub fn coqui_peer_noise::NoiseHandshake::with_binding(self, &[u8]) -> core::result::Result<Self, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::NoiseHandshake::binding(self, &[u8]) -> core::result::Result<Self, coqui_peer_noise::Error>
 impl coqui_peer::method::Handshake for coqui_peer_noise::NoiseHandshake
 pub type coqui_peer_noise::NoiseHandshake::Error = coqui_peer_noise::Error
 pub type coqui_peer_noise::NoiseHandshake::Output = coqui_peer_noise::Session
@@ -98,6 +101,11 @@ pub fn coqui_peer_noise::NoiseHandshake::receive(&mut self, &[u8]) -> core::resu
 pub fn coqui_peer_noise::NoiseHandshake::transmit(&mut self) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, coqui_peer_noise::Error>
 impl core::fmt::Debug for coqui_peer_noise::NoiseHandshake
 pub fn coqui_peer_noise::NoiseHandshake::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct coqui_peer_noise::NoiseSettings
+pub coqui_peer_noise::NoiseSettings::key_limit: u64
+pub coqui_peer_noise::NoiseSettings::rekey: bool
+impl core::default::Default for coqui_peer_noise::NoiseSettings
+pub fn coqui_peer_noise::NoiseSettings::default() -> Self
 pub struct coqui_peer_noise::Opener
 impl coqui_peer_noise::Opener
 pub fn coqui_peer_noise::Opener::open(&mut self, &[u8]) -> core::result::Result<core::option::Option<alloc::vec::Vec<u8>>, coqui_peer_noise::Error>
@@ -123,15 +131,10 @@ impl core::fmt::Debug for coqui_peer_noise::PairingHandshake
 pub fn coqui_peer_noise::PairingHandshake::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct coqui_peer_noise::PairingMethod
 impl coqui_peer_noise::PairingMethod
+pub fn coqui_peer_noise::PairingMethod::builder(coqui_peer_noise::Identity) -> coqui_peer_noise::PairingMethodBuilder
 pub fn coqui_peer_noise::PairingMethod::identity(&self) -> &coqui_peer_noise::Identity
-pub fn coqui_peer_noise::PairingMethod::new(coqui_peer_noise::Identity) -> Self
 pub fn coqui_peer_noise::PairingMethod::non_defaults(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
-pub fn coqui_peer_noise::PairingMethod::weakened(&self) -> alloc::vec::Vec<coqui_peer::non_default::NonDefault>
-pub const fn coqui_peer_noise::PairingMethod::with_first_message_timeout(self, core::option::Option<core::time::Duration>) -> Self
-pub fn coqui_peer_noise::PairingMethod::with_key_limit(self, u64) -> Self
-pub fn coqui_peer_noise::PairingMethod::with_random(self, coqui_peer::random::Random) -> Self
-pub fn coqui_peer_noise::PairingMethod::with_rekey(self, bool) -> Self
-pub fn coqui_peer_noise::PairingMethod::with_responders(self, coqui_peer_noise::Trust) -> Self
+pub fn coqui_peer_noise::PairingMethod::settings(&self) -> coqui_peer_noise::PairingSettings
 impl coqui_peer::method::Method for coqui_peer_noise::PairingMethod
 pub type coqui_peer_noise::PairingMethod::Handshake = coqui_peer_noise::PairingHandshake
 pub fn coqui_peer_noise::PairingMethod::initiate(&self) -> core::result::Result<coqui_peer_noise::PairingHandshake, coqui_peer_noise::Error>
@@ -139,6 +142,15 @@ pub fn coqui_peer_noise::PairingMethod::name(&self) -> &'static str
 pub fn coqui_peer_noise::PairingMethod::respond(&self, core::option::Option<core::net::socket_addr::SocketAddr>) -> core::result::Result<coqui_peer_noise::PairingHandshake, coqui_peer_noise::Error>
 impl core::fmt::Debug for coqui_peer_noise::PairingMethod
 pub fn coqui_peer_noise::PairingMethod::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct coqui_peer_noise::PairingMethodBuilder
+impl coqui_peer_noise::PairingMethodBuilder
+pub fn coqui_peer_noise::PairingMethodBuilder::build(self) -> coqui_peer_noise::PairingMethod
+pub fn coqui_peer_noise::PairingMethodBuilder::first_message_timeout(self, core::time::Duration) -> Self
+pub fn coqui_peer_noise::PairingMethodBuilder::key_limit(self, u64) -> Self
+pub fn coqui_peer_noise::PairingMethodBuilder::random(self, coqui_peer::random::Random) -> Self
+pub fn coqui_peer_noise::PairingMethodBuilder::rekey(self, bool) -> Self
+pub fn coqui_peer_noise::PairingMethodBuilder::responders(self, coqui_peer_noise::Trust) -> Self
+pub fn coqui_peer_noise::PairingMethodBuilder::settings(self, coqui_peer_noise::PairingSettings) -> Self
 pub struct coqui_peer_noise::PairingSession
 impl coqui_peer_noise::PairingSession
 pub const fn coqui_peer_noise::PairingSession::id(&self) -> &[u8; 32]
@@ -149,6 +161,12 @@ pub fn coqui_peer_noise::PairingSession::peer_id(&self) -> coqui_peer::id::PeerI
 pub fn coqui_peer_noise::PairingSession::respond<T: coqui_peer::drive::MessageTransport + coqui_peer_noise::CurrentReadTimeout>(self, &coqui_peer::store::TrustStore, &coqui_peer::pair::desk::PairingDesk, core::option::Option<core::net::socket_addr::SocketAddr>, &mut T) -> core::result::Result<coqui_peer::pair::Paired, coqui_peer_noise::Error>
 impl core::fmt::Debug for coqui_peer_noise::PairingSession
 pub fn coqui_peer_noise::PairingSession::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct coqui_peer_noise::PairingSettings
+pub coqui_peer_noise::PairingSettings::first_message_timeout: core::time::Duration
+pub coqui_peer_noise::PairingSettings::key_limit: u64
+pub coqui_peer_noise::PairingSettings::rekey: bool
+impl core::default::Default for coqui_peer_noise::PairingSettings
+pub fn coqui_peer_noise::PairingSettings::default() -> Self
 pub struct coqui_peer_noise::Sealer
 impl coqui_peer_noise::Sealer
 pub fn coqui_peer_noise::Sealer::close(&mut self) -> core::result::Result<alloc::vec::Vec<u8>, coqui_peer_noise::Error>
