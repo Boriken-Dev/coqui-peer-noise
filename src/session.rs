@@ -99,8 +99,8 @@ impl Sealer {
     ///
     /// [`Error::Record`] after a bad record in either direction, [`Error::Closed`] after
     /// [`close`](Sealer::close). [`Error::LimitReached`] when a Noise message of this record costs
-    /// more than [`with_key_limit`](crate::Noise::with_key_limit), or, with
-    /// [`with_rekey(false)`](crate::Noise::with_rekey), when this record would pass the limit: nothing
+    /// more than [`key_limit`](crate::NoiseSettings::key_limit), or, with
+    /// [`rekey(false)`](crate::NoiseSettings::rekey), when this record would pass the limit: nothing
     /// is sent, the session stays intact, and a close still passes. It is also what the last usable
     /// nonce gives, and that ends the session, as section 5 of the Noise specification says.
     pub fn seal(&mut self, message: &[u8]) -> Result<Vec<u8>, Error> {

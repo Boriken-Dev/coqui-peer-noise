@@ -49,8 +49,9 @@ fn opened(transport: &mut snow::TransportState, record: &[u8]) -> Vec<u8> {
 fn this_crate_as_initiator_with_a_snow_responder() {
     let client = Identity::generate().unwrap();
     let snow_id = identity_of(SNOW_KEY);
-    let mut at_us = Noise::new(client)
-        .with_responders(Trust::pinned([snow_id.peer_id()]))
+    let mut at_us = Noise::builder(client)
+        .responders(Trust::pinned([snow_id.peer_id()]))
+        .build()
         .initiate()
         .unwrap();
     let prologue = prologue();
@@ -88,8 +89,9 @@ fn this_crate_as_initiator_with_a_snow_responder() {
 fn this_crate_as_responder_with_a_snow_initiator_changing_keys_as_snow_does() {
     let server = Identity::generate().unwrap();
     let snow_id = identity_of(SNOW_KEY);
-    let mut at_us = Noise::new(server.clone())
-        .with_initiators(Trust::pinned([snow_id.peer_id()]))
+    let mut at_us = Noise::builder(server.clone())
+        .initiators(Trust::pinned([snow_id.peer_id()]))
+        .build()
         .respond(None)
         .unwrap();
     let prologue = prologue();
@@ -138,9 +140,10 @@ fn this_crate_as_responder_with_a_snow_initiator_changing_keys_as_snow_does() {
 fn a_key_change_from_this_crate_is_what_snow_rekey_incoming_expects() {
     let client = Identity::generate().unwrap();
     let snow_id = identity_of(SNOW_KEY);
-    let method = Noise::new(client)
-        .with_responders(Trust::pinned([snow_id.peer_id()]))
-        .with_key_limit(298);
+    let method = Noise::builder(client)
+        .responders(Trust::pinned([snow_id.peer_id()]))
+        .key_limit(298)
+        .build();
     let mut at_us = method.initiate().unwrap();
     let prologue = prologue();
     let mut at_snow = snow_builder(&prologue, &SNOW_KEY)

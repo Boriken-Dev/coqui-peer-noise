@@ -96,7 +96,7 @@ fn neither_static_key_goes_in_the_clear() {
 
 #[test]
 fn a_role_with_no_trust_configured_is_unsupported() {
-    let method = Noise::new(Identity::generate().unwrap());
+    let method = Noise::builder(Identity::generate().unwrap()).build();
     assert!(matches!(method.initiate(), Err(Error::Unsupported)));
     assert!(matches!(method.respond(None), Err(Error::Unsupported)));
 }
@@ -105,8 +105,12 @@ fn a_role_with_no_trust_configured_is_unsupported() {
 fn a_responder_refuses_an_initiator_it_does_not_pin_only_once_that_peer_proved_its_key() {
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
     let stranger = Identity::generate().unwrap();
-    let dialing = Noise::new(client).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::pinned([stranger.peer_id()]));
+    let dialing = Noise::builder(client)
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::pinned([stranger.peer_id()]))
+        .build();
     let (mut a, mut b) = (
         dialing.initiate().unwrap(),
         listening.respond(None).unwrap(),
@@ -124,8 +128,12 @@ fn a_responder_refuses_an_initiator_it_does_not_pin_only_once_that_peer_proved_i
 fn an_initiator_refuses_a_responder_it_does_not_pin_and_sends_it_nothing_more() {
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
     let stranger = Identity::generate().unwrap();
-    let dialing = Noise::new(client.clone()).with_responders(Trust::pinned([stranger.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::pinned([client.peer_id()]));
+    let dialing = Noise::builder(client.clone())
+        .responders(Trust::pinned([stranger.peer_id()]))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::pinned([client.peer_id()]))
+        .build();
     let (mut a, mut b) = (
         dialing.initiate().unwrap(),
         listening.respond(None).unwrap(),
@@ -140,8 +148,10 @@ fn an_initiator_refuses_a_responder_it_does_not_pin_and_sends_it_nothing_more() 
 #[test]
 fn an_empty_pin_set_admits_nobody() {
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::pinned([]));
+    let dialing = Noise::builder(client)
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let listening = Noise::builder(server).initiators(Trust::pinned([])).build();
     assert!(matches!(run(&dialing, &listening), Err(Error::Untrusted)));
 }
 
@@ -149,8 +159,10 @@ fn an_empty_pin_set_admits_nobody() {
 fn a_pin_of_another_digest_matches_nothing() {
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
     let sha512 = coqui_peer::Digest::Sha512.of(server.spki_der());
-    let dialing = Noise::new(client).with_responders(Trust::pinned([sha512]));
-    let listening = Noise::new(server).with_initiators(Trust::pinned([]));
+    let dialing = Noise::builder(client)
+        .responders(Trust::pinned([sha512]))
+        .build();
+    let listening = Noise::builder(server).initiators(Trust::pinned([])).build();
     let (mut a, mut b) = (
         dialing.initiate().unwrap(),
         listening.respond(None).unwrap(),
@@ -195,8 +207,10 @@ fn messages_out_of_their_place_are_refused() {
 fn a_peer_dialling_itself_is_refused() {
     let identity = Identity::generate().unwrap();
     let trust = Trust::pinned([identity.peer_id()]);
-    let dialing = Noise::new(identity.clone()).with_responders(trust.clone());
-    let listening = Noise::new(identity).with_initiators(trust);
+    let dialing = Noise::builder(identity.clone())
+        .responders(trust.clone())
+        .build();
+    let listening = Noise::builder(identity).initiators(trust).build();
     let (mut a, mut b) = (
         dialing.initiate().unwrap(),
         listening.respond(None).unwrap(),
@@ -207,10 +221,10 @@ fn a_peer_dialling_itself_is_refused() {
 #[test]
 fn a_failing_source_gives_an_error_and_not_a_panic() {
     let failing = coqui_peer_noise::Random::from_fn(|_| Err(coqui_peer::Error::Random));
-    let (_, _, dialing, listening) = pinned_pair();
-    let broken = dialing.clone().with_random(failing.clone());
+    let (_, _, broken, listening) = support::pinned_pair_with(failing);
     assert!(matches!(broken.initiate(), Err(Error::Random)));
-    let mut b = listening.with_random(failing).respond(None).unwrap();
+    let mut b = listening.respond(None).unwrap();
+    let (_, _, dialing, _) = support::pinned_pair();
     let first = dialing.initiate().unwrap().transmit().unwrap().unwrap();
     assert!(matches!(b.receive(&first), Err(Error::Random)));
 }
@@ -218,9 +232,11 @@ fn a_failing_source_gives_an_error_and_not_a_panic() {
 #[test]
 fn looser_settings_are_reported() {
     let identity = Identity::generate().unwrap();
-    let plain = Noise::new(identity);
-    assert!(plain.non_defaults().is_empty());
-    assert!(plain.clone().with_key_limit(1).non_defaults().is_empty());
+    let configured =
+        |build: &dyn Fn(coqui_peer_noise::NoiseBuilder) -> coqui_peer_noise::NoiseBuilder| {
+            build(Noise::builder(identity.clone())).build()
+        };
+    assert!(configured(&|builder| builder).non_defaults().is_empty());
     let names = |method: Noise| {
         method
             .non_defaults()
@@ -229,11 +245,19 @@ fn looser_settings_are_reported() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        names(plain.clone().with_key_limit(DEFAULT_KEY_LIMIT + 1)),
+        names(configured(
+            &|builder| builder.key_limit(DEFAULT_KEY_LIMIT + 1)
+        )),
         ["key_limit"]
     );
-    assert_eq!(names(plain.clone().with_rekey(false)), ["rekey"]);
-    assert_eq!(names(plain.with_random(scripted(&[]))), ["random"]);
+    assert_eq!(
+        names(configured(&|builder| builder.rekey(false))),
+        ["rekey"]
+    );
+    assert_eq!(
+        names(configured(&|builder| builder.random(scripted(&[])))),
+        ["random"]
+    );
 }
 
 #[test]
@@ -256,8 +280,12 @@ fn nothing_secret_is_in_a_debug_form() {
 fn a_store_admits_an_accepted_key_and_records_a_proved_stranger_as_waiting() {
     let (_dir, store) = store();
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client.clone()).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::Store(store.clone()));
+    let dialing = Noise::builder(client.clone())
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::Store(store.clone()))
+        .build();
     let source: SocketAddr = "192.0.2.1:9".parse().unwrap();
 
     let (mut a, mut b) = (
@@ -286,8 +314,12 @@ fn a_store_admits_an_accepted_key_and_records_a_proved_stranger_as_waiting() {
 fn a_peer_that_proves_nothing_is_not_recorded_in_a_store() {
     let (_dir, store) = store();
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::Store(store.clone()));
+    let dialing = Noise::builder(client)
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::Store(store.clone()))
+        .build();
     let (mut a, mut b) = (
         dialing.initiate().unwrap(),
         listening.respond(None).unwrap(),
@@ -306,8 +338,12 @@ fn a_peer_that_proves_nothing_is_not_recorded_in_a_store() {
 fn an_initiator_keeping_a_store_records_nobody() {
     let (_dir, store) = store();
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client.clone()).with_responders(Trust::Store(store.clone()));
-    let listening = Noise::new(server).with_initiators(Trust::pinned([client.peer_id()]));
+    let dialing = Noise::builder(client.clone())
+        .responders(Trust::Store(store.clone()))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::pinned([client.peer_id()]))
+        .build();
     assert!(matches!(run(&dialing, &listening), Err(Error::Untrusted)));
     assert!(store.waiting().unwrap().is_empty());
 }
@@ -319,8 +355,12 @@ fn a_store_key_of_another_method_with_the_same_bytes_is_not_this_key() {
     let mut material = client.key_material();
     material.method = "webcrypto".to_owned();
     store.accept_key(&material).unwrap();
-    let dialing = Noise::new(client).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::Store(store));
+    let dialing = Noise::builder(client)
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::Store(store))
+        .build();
     assert!(matches!(run(&dialing, &listening), Err(Error::Untrusted)));
 }
 
@@ -336,8 +376,12 @@ fn the_proved_successor_of_an_accepted_key_is_promoted() {
     store
         .announce_successor(&old.peer_id(), &new.key_material())
         .unwrap();
-    let dialing = Noise::new(new.clone()).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::Store(store.clone()));
+    let dialing = Noise::builder(new.clone())
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::Store(store.clone()))
+        .build();
     run(&dialing, &listening).unwrap();
     assert!(store.is_accepted(&new.peer_id()));
 }
@@ -355,8 +399,12 @@ fn a_noise_key_can_succeed_an_accepted_key_of_another_method() {
     store
         .announce_successor(&old.id(), &noise_key.key_material())
         .unwrap();
-    let dialing = Noise::new(noise_key.clone()).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server).with_initiators(Trust::Store(store.clone()));
+    let dialing = Noise::builder(noise_key.clone())
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::Store(store.clone()))
+        .build();
     run(&dialing, &listening).unwrap();
     assert_eq!(
         store.accepted_key(&noise_key.peer_id()).unwrap(),

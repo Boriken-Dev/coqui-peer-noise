@@ -36,7 +36,7 @@ pub enum Error {
     Truncated,
     /// This side already sent its close record, so it sends no more.
     Closed,
-    /// A key reached [`with_key_limit`](crate::Noise::with_key_limit). See
+    /// A key reached [`key_limit`](crate::NoiseSettings::key_limit). See
     /// [`Sealer::seal`](crate::Sealer::seal) and [`Opener::open`](crate::Opener::open).
     LimitReached,
     /// An export is longer than HKDF-SHA256 can give.

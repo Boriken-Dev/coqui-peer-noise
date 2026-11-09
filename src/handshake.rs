@@ -10,7 +10,8 @@ use zeroize::Zeroizing;
 use crate::error::Error;
 use crate::identity::{Identity, key_material};
 use crate::noise::{DHLEN, TAGLEN, Xx};
-use crate::session::{DEFAULT_KEY_LIMIT, Limits, Session};
+use crate::session::{Limits, Session};
+use crate::settings::NoiseSettings;
 use crate::trust::{Admit, Trust};
 
 /// The method name: the `<method>` of `coqui-peer-<method>`, under which a trust store keeps the
@@ -48,8 +49,7 @@ struct Config {
     purpose: &'static [u8],
     responders: Option<Admit>,
     initiators: Option<Admit>,
-    key_limit: u64,
-    rekey: bool,
+    settings: NoiseSettings,
     random: Random,
     random_replaced: bool,
 }
@@ -62,8 +62,8 @@ struct Config {
 ///
 /// # fn main() -> Result<(), coqui_peer_noise::Error> {
 /// let (dialer, listener) = (Identity::generate()?, Identity::generate()?);
-/// let client = Noise::new(dialer.clone()).with_responders(Trust::pinned([listener.peer_id()]));
-/// let server = Noise::new(listener).with_initiators(Trust::pinned([dialer.peer_id()]));
+/// let client = Noise::builder(dialer.clone()).responders(Trust::pinned([listener.peer_id()])).build();
+/// let server = Noise::builder(listener).initiators(Trust::pinned([dialer.peer_id()])).build();
 ///
 /// let (mut dialing, mut listening) = (client.initiate()?, server.respond(None)?);
 /// while !(dialing.is_complete() && listening.is_complete()) {
@@ -87,81 +87,86 @@ struct Config {
 #[derive(Clone)]
 pub struct Noise(Arc<Config>);
 
-impl Noise {
-    /// A method for `identity`, configured for neither role until
-    /// [`with_responders`](Noise::with_responders) or [`with_initiators`](Noise::with_initiators).
-    #[must_use]
-    pub fn new(identity: Identity) -> Self {
-        Self(Arc::new(Config {
-            identity,
-            purpose: PURPOSE_ORDINARY,
-            responders: None,
-            initiators: None,
-            key_limit: DEFAULT_KEY_LIMIT,
-            rekey: true,
-            random: crate::random(),
-            random_replaced: false,
-        }))
-    }
+/// Builds a [`Noise`]: [`Noise::builder`], the settings, then [`build`](Self::build).
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct NoiseBuilder(Config);
 
+impl NoiseBuilder {
     /// The method a [`PairingMethod`](crate::PairingMethod) runs: any proved key, in both roles.
     pub(crate) fn admitting_anyone(identity: Identity) -> Self {
-        let mut method = Self::new(identity);
-        let config = Arc::make_mut(&mut method.0);
-        config.purpose = PURPOSE_PAIR;
-        config.responders = Some(Admit::Any);
-        config.initiators = Some(Admit::Any);
-        method
-    }
-
-    /// Whether an initiator's peer is admitted by a pin or a store, and not as any proved key.
-    pub(crate) fn verifies_responders(&self) -> bool {
-        matches!(self.0.responders, Some(Admit::Trust(_)))
+        let mut builder = Noise::builder(identity);
+        builder.0.purpose = PURPOSE_PAIR;
+        builder.0.responders = Some(Admit::Any);
+        builder.0.initiators = Some(Admit::Any);
+        builder
     }
 
     /// Whom [`initiate`](Method::initiate) admits as the responder.
-    #[must_use]
-    pub fn with_responders(mut self, trust: Trust) -> Self {
-        Arc::make_mut(&mut self.0).responders = Some(Admit::Trust(trust));
+    pub fn responders(mut self, trust: Trust) -> Self {
+        self.0.responders = Some(Admit::Trust(trust));
         self
     }
 
     /// Whom [`respond`](Method::respond) admits as the initiator.
-    #[must_use]
-    pub fn with_initiators(mut self, trust: Trust) -> Self {
-        Arc::make_mut(&mut self.0).initiators = Some(Admit::Trust(trust));
+    pub fn initiators(mut self, trust: Trust) -> Self {
+        self.0.initiators = Some(Admit::Trust(trust));
         self
     }
 
-    /// What one key may carry in one direction, each Noise message counting its length and 32;
-    /// [`DEFAULT_KEY_LIMIT`] by default. There is no floor: a limit below what a message costs
-    /// refuses that message, and a limit of zero passes only a close. Above the default, AES-GCM's
-    /// confidentiality margin shrinks. A peer is held to the larger of this and the default, so a
-    /// lower limit changes only this side's own sending.
-    #[must_use]
-    pub fn with_key_limit(mut self, bytes: u64) -> Self {
-        Arc::make_mut(&mut self.0).key_limit = bytes;
+    /// What one key may carry in one direction; see [`NoiseSettings::key_limit`].
+    pub fn key_limit(mut self, bytes: u64) -> Self {
+        self.0.settings.key_limit = bytes;
         self
     }
 
-    /// Whether this side changes its sending key by itself at the key limit, which it does by
-    /// default. Off, `seal` gives [`Error::LimitReached`] there and a new handshake carries on.
-    /// Each side decides for itself: the change is announced in the record that makes it.
-    #[must_use]
-    pub fn with_rekey(mut self, rekey: bool) -> Self {
-        Arc::make_mut(&mut self.0).rekey = rekey;
+    /// Whether this side changes its sending key by itself at the key limit; see
+    /// [`NoiseSettings::rekey`].
+    pub fn rekey(mut self, rekey: bool) -> Self {
+        self.0.settings.rekey = rekey;
         self
     }
 
     /// Where ephemeral keys come from; the operating system by default. It must be cryptographically
     /// secure: section 14 of the Noise specification calls a reused ephemeral key catastrophic. A
-    /// fixed source is for test vectors. It is reported by [`non_defaults`](Noise::non_defaults).
-    #[must_use]
-    pub fn with_random(mut self, random: Random) -> Self {
-        let config = Arc::make_mut(&mut self.0);
-        config.random = random;
-        config.random_replaced = true;
+    /// fixed source is for test vectors. It is reported by [`Noise::non_defaults`].
+    pub fn random(mut self, random: Random) -> Self {
+        self.0.random = random;
+        self.0.random_replaced = true;
         self
+    }
+
+    /// The key limit and rekeying from `settings`. Replaces what [`key_limit`](Self::key_limit)
+    /// and [`rekey`](Self::rekey) set before, and is replaced by what they set after it.
+    pub fn settings(mut self, settings: NoiseSettings) -> Self {
+        self.0.settings = settings;
+        self
+    }
+
+    /// The method.
+    pub fn build(self) -> Noise {
+        Noise(Arc::new(self.0))
+    }
+}
+
+impl Noise {
+    /// A builder for a method for `identity`, configured for neither role until
+    /// [`responders`](NoiseBuilder::responders) or [`initiators`](NoiseBuilder::initiators).
+    pub fn builder(identity: Identity) -> NoiseBuilder {
+        NoiseBuilder(Config {
+            identity,
+            purpose: PURPOSE_ORDINARY,
+            responders: None,
+            initiators: None,
+            settings: NoiseSettings::default(),
+            random: crate::random(),
+            random_replaced: false,
+        })
+    }
+
+    /// Whether an initiator's peer is admitted by a pin or a store, and not as any proved key.
+    pub(crate) fn verifies_responders(&self) -> bool {
+        matches!(self.0.responders, Some(Admit::Trust(_)))
     }
 
     /// This method's identity.
@@ -170,32 +175,21 @@ impl Noise {
         &self.0.identity
     }
 
-    /// The settings looser than their default.
+    /// The key limit and rekeying it was built with.
+    #[must_use]
+    pub fn settings(&self) -> NoiseSettings {
+        self.0.settings
+    }
+
+    /// Every setting that differs from its default, named by key path, and `random` when the
+    /// ephemeral keys do not come from the operating system.
     #[must_use]
     pub fn non_defaults(&self) -> Vec<NonDefault> {
-        let config = &self.0;
-        let mut non_defaults = Vec::new();
-        if config.key_limit > DEFAULT_KEY_LIMIT {
-            non_defaults.push(NonDefault::new(
-                "key_limit",
-                config.key_limit.to_string(),
-                DEFAULT_KEY_LIMIT.to_string(),
-            ));
-        }
-        if !config.rekey {
-            non_defaults.push(NonDefault::new("rekey", "off", "on"));
-        }
-        if config.random_replaced {
+        let mut non_defaults = NonDefault::of_settings(&self.0.settings);
+        if self.0.random_replaced {
             non_defaults.push(NonDefault::new("random", "caller's", "operating system's"));
         }
         non_defaults
-    }
-
-    /// The old name of [`non_defaults`](Self::non_defaults).
-    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
-    #[must_use]
-    pub fn weakened(&self) -> Vec<NonDefault> {
-        self.non_defaults()
     }
 }
 
@@ -206,8 +200,7 @@ impl fmt::Debug for Noise {
             .field("identity", &self.0.identity)
             .field("responders", &self.0.responders)
             .field("initiators", &self.0.initiators)
-            .field("key_limit", &self.0.key_limit)
-            .field("rekey", &self.0.rekey)
+            .field("settings", &self.0.settings)
             .finish_non_exhaustive()
     }
 }
@@ -224,7 +217,7 @@ impl Method for Noise {
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] without [`with_responders`](Noise::with_responders),
+    /// [`Error::Unsupported`] without [`responders`](NoiseBuilder::responders),
     /// [`Error::Random`] when the generator fails.
     fn initiate(&self) -> Result<NoiseHandshake, Error> {
         if self.0.responders.is_none() {
@@ -242,7 +235,7 @@ impl Method for Noise {
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] without [`with_initiators`](Noise::with_initiators).
+    /// [`Error::Unsupported`] without [`initiators`](NoiseBuilder::initiators).
     fn respond(&self, source: Option<SocketAddr>) -> Result<NoiseHandshake, Error> {
         if self.0.initiators.is_none() {
             return Err(Error::Unsupported);
@@ -306,7 +299,7 @@ impl NoiseHandshake {
     ///
     /// [`Error::State`] after the first [`transmit`](Handshake::transmit) or
     /// [`receive`](Handshake::receive): the prologue is fixed by then.
-    pub fn with_binding(mut self, binding: &[u8]) -> Result<Self, Error> {
+    pub fn binding(mut self, binding: &[u8]) -> Result<Self, Error> {
         if !matches!(self.state, State::Start(_) | State::AwaitFirst) {
             return Err(Error::State);
         }
@@ -326,8 +319,8 @@ impl NoiseHandshake {
 
     fn limits(&self) -> Limits {
         Limits {
-            key_limit: self.config.key_limit,
-            rekey: self.config.rekey,
+            key_limit: self.config.settings.key_limit,
+            rekey: self.config.settings.rekey,
         }
     }
 

@@ -18,22 +18,22 @@ mod identity;
 mod noise;
 mod pairing;
 mod session;
+mod settings;
 mod trust;
 
-#[allow(deprecated)]
-pub use coqui_peer::Weakening;
 pub use coqui_peer::{
     Established, KeyMaterial, MessageTransport, Method, NonDefault, PeerId, Random, TrustStore,
     pair,
 };
 pub use error::Error;
 pub use framed::{CurrentReadTimeout, FramedStream, MAX_HANDSHAKE_MESSAGE};
-pub use handshake::{METHOD, Noise, NoiseHandshake, PROFILE, random};
+pub use handshake::{METHOD, Noise, NoiseBuilder, NoiseHandshake, PROFILE, random};
 pub use identity::Identity;
 pub use noise::PROTOCOL_NAME;
 pub use pairing::{
     DEFAULT_FIRST_MESSAGE_TIMEOUT, MAX_PAIRING_RECORD, PAIR_EXPORT_LABEL, PairDial,
-    PairingHandshake, PairingMethod, PairingSession,
+    PairingHandshake, PairingMethod, PairingMethodBuilder, PairingSession,
 };
 pub use session::{DEFAULT_KEY_LIMIT, Opener, Sealer, Session, record_length};
+pub use settings::{NoiseSettings, PairingSettings};
 pub use trust::Trust;

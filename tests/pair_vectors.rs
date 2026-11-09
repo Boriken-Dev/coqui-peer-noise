@@ -60,14 +60,16 @@ fn joining(pin: &str) -> Pairing {
         Pin::parse(&CodeAlphabet::pin(), pin).unwrap(),
         PinRole::Typed,
     )
-    .with_random(bytes_of(JOINER_PAKE.to_vec()))
+    .random(bytes_of(JOINER_PAKE.to_vec()))
 }
 
 fn sessions() -> (PairingSession, PairingSession, [Vec<u8>; 3]) {
-    let near =
-        PairingMethod::new(identity_of(JOINER_STATIC)).with_random(scripted(&[JOINER_EPHEMERAL]));
-    let far = PairingMethod::new(identity_of(RESPONDER_STATIC))
-        .with_random(scripted(&[RESPONDER_EPHEMERAL]));
+    let near = PairingMethod::builder(identity_of(JOINER_STATIC))
+        .random(scripted(&[JOINER_EPHEMERAL]))
+        .build();
+    let far = PairingMethod::builder(identity_of(RESPONDER_STATIC))
+        .random(scripted(&[RESPONDER_EPHEMERAL]))
+        .build();
     let (mut a, mut b) = (near.initiate().unwrap(), far.respond(None).unwrap());
     let first = a.transmit().unwrap().unwrap();
     b.receive(&first).unwrap();

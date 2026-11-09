@@ -30,9 +30,20 @@ pub fn pkcs8(raw: [u8; 32]) -> Vec<u8> {
 
 /// A pair of identities that pin each other, as methods.
 pub fn pinned_pair() -> (Identity, Identity, Noise, Noise) {
+    pinned_pair_with(coqui_peer_noise::random())
+}
+
+/// As [`pinned_pair`], both sides drawing from `random`.
+pub fn pinned_pair_with(random: coqui_peer_noise::Random) -> (Identity, Identity, Noise, Noise) {
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client.clone()).with_responders(Trust::pinned([server.peer_id()]));
-    let listening = Noise::new(server.clone()).with_initiators(Trust::pinned([client.peer_id()]));
+    let dialing = Noise::builder(client.clone())
+        .responders(Trust::pinned([server.peer_id()]))
+        .random(random.clone())
+        .build();
+    let listening = Noise::builder(server.clone())
+        .initiators(Trust::pinned([client.peer_id()]))
+        .random(random)
+        .build();
     (client, server, dialing, listening)
 }
 

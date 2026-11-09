@@ -173,15 +173,17 @@ fn no_freed_block_holds_a_scalar_a_chaining_key_a_traffic_key_or_the_export_secr
         client.write_new(&path).unwrap();
         drop(Identity::read(&path).unwrap().unwrap());
 
-        let dialing = Noise::new(client.clone())
-            .with_responders(Trust::pinned([server.peer_id()]))
-            .with_random(scripted(&SOURCE_INITIATOR));
-        let listening = Noise::new(server.clone())
-            .with_initiators(Trust::pinned([client.peer_id()]))
-            .with_random(scripted(&SOURCE_RESPONDER))
+        let dialing = Noise::builder(client.clone())
+            .responders(Trust::pinned([server.peer_id()]))
+            .random(scripted(&SOURCE_INITIATOR))
             // Small, so that the session below changes its keys.
-            .with_key_limit(298);
-        let dialing = dialing.with_key_limit(298);
+            .key_limit(298)
+            .build();
+        let listening = Noise::builder(server.clone())
+            .initiators(Trust::pinned([client.peer_id()]))
+            .random(scripted(&SOURCE_RESPONDER))
+            .key_limit(298)
+            .build();
         let ((to_far, from_near), (to_near, from_far)) =
             (std::sync::mpsc::channel(), std::sync::mpsc::channel());
         let serving = std::thread::spawn(move || {

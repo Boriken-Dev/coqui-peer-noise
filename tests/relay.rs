@@ -209,8 +209,9 @@ fn a_relay_running_a_handshake_of_its_own_fails_a_pin_and_misbinds_nobody() {
     let relay = Identity::generate().unwrap();
 
     // Facing the client, the relay answers as itself. The client pins the server.
-    let facing_client =
-        Noise::new(relay.clone()).with_initiators(Trust::pinned([client.peer_id()]));
+    let facing_client = Noise::builder(relay.clone())
+        .initiators(Trust::pinned([client.peer_id()]))
+        .build();
     let (mut a, mut b) = (
         dialing.initiate().unwrap(),
         facing_client.respond(None).unwrap(),
@@ -218,7 +219,9 @@ fn a_relay_running_a_handshake_of_its_own_fails_a_pin_and_misbinds_nobody() {
     assert!(matches!(exchange(&mut a, &mut b), Err(Error::Untrusted)));
 
     // Facing the server, the relay dials as itself. The server pins the client.
-    let facing_server = Noise::new(relay).with_responders(Trust::pinned([server.peer_id()]));
+    let facing_server = Noise::builder(relay)
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
     let (mut a, mut b) = (
         facing_server.initiate().unwrap(),
         listening.respond(None).unwrap(),
@@ -236,12 +239,18 @@ fn a_client_that_trusts_a_relay_and_a_server_that_trusts_it_share_no_session_thr
         Identity::generate().unwrap(),
         Identity::generate().unwrap(),
     );
-    let client_side = Noise::new(client.clone()).with_responders(Trust::pinned([relay.peer_id()]));
-    let relay_as_responder =
-        Noise::new(relay.clone()).with_initiators(Trust::pinned([client.peer_id()]));
-    let relay_as_initiator =
-        Noise::new(relay.clone()).with_responders(Trust::pinned([server.peer_id()]));
-    let server_side = Noise::new(server).with_initiators(Trust::pinned([relay.peer_id()]));
+    let client_side = Noise::builder(client.clone())
+        .responders(Trust::pinned([relay.peer_id()]))
+        .build();
+    let relay_as_responder = Noise::builder(relay.clone())
+        .initiators(Trust::pinned([client.peer_id()]))
+        .build();
+    let relay_as_initiator = Noise::builder(relay.clone())
+        .responders(Trust::pinned([server.peer_id()]))
+        .build();
+    let server_side = Noise::builder(server)
+        .initiators(Trust::pinned([relay.peer_id()]))
+        .build();
     let (near, relay_near) = run(&client_side, &relay_as_responder).unwrap();
     let (relay_far, far) = run(&relay_as_initiator, &server_side).unwrap();
     assert_eq!(near.peer, relay.peer_id());
@@ -269,12 +278,8 @@ fn an_outer_binding_is_optional_and_refuses_two_different_channels() {
     let (_, _, dialing, listening) = pinned_pair();
     let bind = |binding: &[u8]| {
         (
-            dialing.initiate().unwrap().with_binding(binding).unwrap(),
-            listening
-                .respond(None)
-                .unwrap()
-                .with_binding(binding)
-                .unwrap(),
+            dialing.initiate().unwrap().binding(binding).unwrap(),
+            listening.respond(None).unwrap().binding(binding).unwrap(),
         )
     };
     let (mut a, mut b) = bind(b"the same channel");
@@ -282,24 +287,16 @@ fn an_outer_binding_is_optional_and_refuses_two_different_channels() {
     let bound_id = *a.finish().unwrap().session.id();
 
     // A relay ending TLS on both sides gives each end another value.
-    let mut a = dialing
-        .initiate()
-        .unwrap()
-        .with_binding(b"client side")
-        .unwrap();
+    let mut a = dialing.initiate().unwrap().binding(b"client side").unwrap();
     let mut b = listening
         .respond(None)
         .unwrap()
-        .with_binding(b"server side")
+        .binding(b"server side")
         .unwrap();
     assert!(matches!(exchange(&mut a, &mut b), Err(Error::BadProof)));
 
     // One end with a binding, one without: a proxy that ends TLS for one side only.
-    let mut a = dialing
-        .initiate()
-        .unwrap()
-        .with_binding(b"client side")
-        .unwrap();
+    let mut a = dialing.initiate().unwrap().binding(b"client side").unwrap();
     let mut b = listening.respond(None).unwrap();
     assert!(matches!(exchange(&mut a, &mut b), Err(Error::BadProof)));
 
@@ -313,10 +310,10 @@ fn a_binding_set_after_the_prologue_is_fixed_is_refused() {
     let (_, _, dialing, listening) = pinned_pair();
     let mut a = dialing.initiate().unwrap();
     let first = a.transmit().unwrap().unwrap();
-    assert!(matches!(a.with_binding(b"late"), Err(Error::State)));
+    assert!(matches!(a.binding(b"late"), Err(Error::State)));
     let mut b = listening.respond(None).unwrap();
     b.receive(&first).unwrap();
-    assert!(matches!(b.with_binding(b"late"), Err(Error::State)));
+    assert!(matches!(b.binding(b"late"), Err(Error::State)));
 }
 
 #[test]

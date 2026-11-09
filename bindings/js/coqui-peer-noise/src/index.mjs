@@ -664,8 +664,6 @@ async function dialling(local, purpose, settings, looser, admit, finish) {
   return Object.freeze({
     /** The settings looser than their default: `[{setting, value, default}]`. */
     nonDefaults: () => [...nonDefaultSettings(settings), ...looser],
-    /** The old name of `nonDefaults`, kept for one release. */
-    weakened: () => [...nonDefaultSettings(settings), ...looser],
     /** The first message. */
     async hello() {
       if (state !== 'start') throw new Error('Unexpected hello');
@@ -703,8 +701,6 @@ async function accepting(local, purpose, settings, looser, admit, finish) {
   return Object.freeze({
     /** The settings looser than their default: `[{setting, value, default}]`. */
     nonDefaults: () => [...nonDefaultSettings(settings), ...looser],
-    /** The old name of `nonDefaults`, kept for one release. */
-    weakened: () => [...nonDefaultSettings(settings), ...looser],
     /** Takes the first message, and gives the second. */
     async challenge(raw) {
       if (state !== 'first') throw new Error('Unexpected hello');
@@ -1111,10 +1107,6 @@ export function createPairingDesk({
       if (random !== OS_RANDOM) found.push(nonDefault('random', "caller's", "the engine's"));
       if (now !== Date.now) found.push(nonDefault('now', "caller's", 'Date.now'));
       return found;
-    },
-    /** The old name of `nonDefaults`, kept for one release. */
-    weakened() {
-      return desk.nonDefaults();
     },
     /** Shows a new PIN, replacing any before it, with its attempts. */
     showPin() {

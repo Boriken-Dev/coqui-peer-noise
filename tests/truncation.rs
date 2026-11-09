@@ -9,14 +9,16 @@ use support::{Forger, run, sessions};
 /// Sessions under the same settings at both ends.
 fn limited(limit: u64, rekey: bool) -> (Session, Session) {
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client.clone())
-        .with_responders(Trust::pinned([server.peer_id()]))
-        .with_key_limit(limit)
-        .with_rekey(rekey);
-    let listening = Noise::new(server)
-        .with_initiators(Trust::pinned([client.peer_id()]))
-        .with_key_limit(limit)
-        .with_rekey(rekey);
+    let dialing = Noise::builder(client.clone())
+        .responders(Trust::pinned([server.peer_id()]))
+        .key_limit(limit)
+        .rekey(rekey)
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::pinned([client.peer_id()]))
+        .key_limit(limit)
+        .rekey(rekey)
+        .build();
     let (near, far) = run(&dialing, &listening).unwrap();
     (near.session, far.session)
 }
@@ -175,10 +177,13 @@ fn a_long_record_refused_at_the_limit_leaves_the_session_as_it_was() {
 fn each_side_decides_about_rekeying_for_itself() {
     // One end with a low limit for its own sending, and the other far above it.
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::new(client.clone())
-        .with_responders(Trust::pinned([server.peer_id()]))
-        .with_key_limit(298);
-    let listening = Noise::new(server).with_initiators(Trust::pinned([client.peer_id()]));
+    let dialing = Noise::builder(client.clone())
+        .responders(Trust::pinned([server.peer_id()]))
+        .key_limit(298)
+        .build();
+    let listening = Noise::builder(server)
+        .initiators(Trust::pinned([client.peer_id()]))
+        .build();
     let (near, far) = run(&dialing, &listening).unwrap();
     let (mut near, mut far) = (near.session, far.session);
     for index in 0..5u8 {
@@ -217,12 +222,14 @@ fn a_lower_limit_is_for_a_sides_own_sending_only() {
     // is within the default, so what it sends opens, past 200 bytes on one key.
     for low_sends in [false, true] {
         let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-        let dialing = Noise::new(client.clone())
-            .with_responders(Trust::pinned([server.peer_id()]))
-            .with_rekey(false);
-        let listening = Noise::new(server)
-            .with_initiators(Trust::pinned([client.peer_id()]))
-            .with_key_limit(200);
+        let dialing = Noise::builder(client.clone())
+            .responders(Trust::pinned([server.peer_id()]))
+            .rekey(false)
+            .build();
+        let listening = Noise::builder(server)
+            .initiators(Trust::pinned([client.peer_id()]))
+            .key_limit(200)
+            .build();
         let (near, far) = run(&dialing, &listening).unwrap();
         let (mut near, mut far) = (near.session, far.session);
         // `far` is the one limited to 200.

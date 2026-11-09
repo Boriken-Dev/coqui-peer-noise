@@ -15,9 +15,10 @@ use coqui_peer::{
 
 use crate::error::Error;
 use crate::framed::CurrentReadTimeout;
-use crate::handshake::{METHOD, Noise, NoiseHandshake};
+use crate::handshake::{METHOD, Noise, NoiseBuilder, NoiseHandshake};
 use crate::identity::Identity;
 use crate::session::Session;
+use crate::settings::PairingSettings;
 use crate::trust::Trust;
 
 /// The export label [`PairingSession::pair_channel`] binds a pairing to.
@@ -46,63 +47,86 @@ const MAX_EARLY_TIMEOUTS: u32 = 3;
 /// exchange and nothing else. No application message can pass over it.
 ///
 /// A joiner that knows who it is reaching says so with
-/// [`with_responders`](PairingMethod::with_responders); an invitation and the device flow need it.
+/// [`responders`](PairingMethodBuilder::responders); an invitation and the device flow need it.
 #[derive(Clone)]
 pub struct PairingMethod {
     noise: Noise,
     first_message_timeout: Option<Duration>,
 }
 
-impl PairingMethod {
-    /// A method for `identity`, as a responder admitting any proved key, and as a joiner accepting
-    /// any proved key until [`with_responders`](PairingMethod::with_responders).
-    #[must_use]
-    pub fn new(identity: Identity) -> Self {
-        Self {
-            noise: Noise::admitting_anyone(identity),
-            first_message_timeout: Some(DEFAULT_FIRST_MESSAGE_TIMEOUT),
-        }
-    }
+/// The bound a [`Duration`] stands for: none for [`Duration::MAX`].
+fn bounded(timeout: Duration) -> Option<Duration> {
+    (timeout != Duration::MAX).then_some(timeout)
+}
 
+/// Builds a [`PairingMethod`]: [`PairingMethod::builder`], the settings, then
+/// [`build`](Self::build).
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct PairingMethodBuilder {
+    noise: NoiseBuilder,
+    first_message_timeout: Option<Duration>,
+}
+
+impl PairingMethodBuilder {
     /// Whom a joiner accepts: a pin or a store. The session is then verified, which the device flow
     /// asks for; the key an invitation names must be the proved one in any case.
-    #[must_use]
-    pub fn with_responders(mut self, trust: Trust) -> Self {
-        self.noise = self.noise.with_responders(trust);
+    pub fn responders(mut self, trust: Trust) -> Self {
+        self.noise = self.noise.responders(trust);
         self
     }
 
-    /// How long [`PairingSession::respond`] waits for the joiner's first message; a timeout set on
-    /// the transport still applies if it is shorter. [`DEFAULT_FIRST_MESSAGE_TIMEOUT`] by default, and
-    /// no floor: zero refuses as expired without reading. `None` leaves the transport's own timeout as
-    /// the only bound, and over a transport with none a silent stranger holds it until it closes.
-    /// Anything above the default is reported by [`non_defaults`](PairingMethod::non_defaults).
-    #[must_use]
-    pub const fn with_first_message_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.first_message_timeout = timeout;
+    /// How long [`PairingSession::respond`] waits for the joiner's first message; see
+    /// [`PairingSettings::first_message_timeout`]; [`Duration::MAX`] is no bound but the transport's. [`DEFAULT_FIRST_MESSAGE_TIMEOUT`] by default.
+    pub fn first_message_timeout(mut self, timeout: Duration) -> Self {
+        self.first_message_timeout = bounded(timeout);
         self
     }
 
-    /// As [`Noise::with_key_limit`].
-    #[must_use]
-    pub fn with_key_limit(mut self, bytes: u64) -> Self {
-        self.noise = self.noise.with_key_limit(bytes);
+    /// As [`NoiseBuilder::key_limit`].
+    pub fn key_limit(mut self, bytes: u64) -> Self {
+        self.noise = self.noise.key_limit(bytes);
         self
     }
 
-    /// As [`Noise::with_rekey`].
-    #[must_use]
-    pub fn with_rekey(mut self, rekey: bool) -> Self {
-        self.noise = self.noise.with_rekey(rekey);
+    /// As [`NoiseBuilder::rekey`].
+    pub fn rekey(mut self, rekey: bool) -> Self {
+        self.noise = self.noise.rekey(rekey);
         self
     }
 
-    /// As [`Noise::with_random`]. The PAKE's own random source is the
-    /// [`Pairing`]'s and the [`PairingDesk`]'s.
-    #[must_use]
-    pub fn with_random(mut self, random: Random) -> Self {
-        self.noise = self.noise.with_random(random);
+    /// As [`NoiseBuilder::random`]. The PAKE's own random source is the [`Pairing`]'s and the
+    /// [`PairingDesk`]'s.
+    pub fn random(mut self, random: Random) -> Self {
+        self.noise = self.noise.random(random);
         self
+    }
+
+    /// The key limit, rekeying and first-message timeout from `settings`. Replaces what those
+    /// setters set before, and is replaced by what they set after it.
+    pub fn settings(mut self, settings: PairingSettings) -> Self {
+        self.noise = self.noise.settings(settings.noise());
+        self.first_message_timeout = bounded(settings.first_message_timeout);
+        self
+    }
+
+    /// The method.
+    pub fn build(self) -> PairingMethod {
+        PairingMethod {
+            noise: self.noise.build(),
+            first_message_timeout: self.first_message_timeout,
+        }
+    }
+}
+
+impl PairingMethod {
+    /// A builder for a method for `identity`, as a responder admitting any proved key, and as a
+    /// joiner accepting any proved key until [`responders`](PairingMethodBuilder::responders).
+    pub fn builder(identity: Identity) -> PairingMethodBuilder {
+        PairingMethodBuilder {
+            noise: NoiseBuilder::admitting_anyone(identity),
+            first_message_timeout: Some(DEFAULT_FIRST_MESSAGE_TIMEOUT),
+        }
     }
 
     /// This method's identity.
@@ -111,28 +135,30 @@ impl PairingMethod {
         self.noise.identity()
     }
 
-    /// The settings looser than their default. A pairing method admits any proved key by
-    /// definition, so that is not listed.
+    /// The settings it was built with.
     #[must_use]
-    pub fn non_defaults(&self) -> Vec<NonDefault> {
-        let mut non_defaults = self.noise.non_defaults();
-        let default = DEFAULT_FIRST_MESSAGE_TIMEOUT.as_secs().to_string();
-        match self.first_message_timeout {
-            None => non_defaults.push(NonDefault::new("first_message_timeout", "none", default)),
-            Some(timeout) if timeout > DEFAULT_FIRST_MESSAGE_TIMEOUT => {
-                let value = timeout.as_secs().to_string();
-                non_defaults.push(NonDefault::new("first_message_timeout", value, default));
-            }
-            Some(_) => {}
+    pub fn settings(&self) -> PairingSettings {
+        let noise = self.noise.settings();
+        PairingSettings {
+            key_limit: noise.key_limit,
+            rekey: noise.rekey,
+            first_message_timeout: self.first_message_timeout.unwrap_or(Duration::MAX),
         }
-        non_defaults
     }
 
-    /// The old name of [`non_defaults`](Self::non_defaults).
-    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
+    /// Every setting that differs from its default, named by key path, and `random` when the
+    /// ephemeral keys do not come from the operating system. A pairing method admits any proved key
+    /// by definition, so that is not listed.
     #[must_use]
-    pub fn weakened(&self) -> Vec<NonDefault> {
-        self.non_defaults()
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
+        let mut non_defaults = NonDefault::of_settings(&self.settings());
+        let random = self
+            .noise
+            .non_defaults()
+            .into_iter()
+            .filter(|setting| setting.setting == "random");
+        non_defaults.extend(random);
+        non_defaults
     }
 }
 
@@ -287,7 +313,7 @@ impl PairingSession {
 
     /// The [`Channel`] an exchange runs on: `local` this side's key, `remote` the key this handshake
     /// proved, which no caller can name instead, `verified` when a joiner's
-    /// [`with_responders`](PairingMethod::with_responders) admitted the peer, and `binding` a 32-byte
+    /// [`responders`](PairingMethodBuilder::responders) admitted the peer, and `binding` a 32-byte
     /// export under [`PAIR_EXPORT_LABEL`], tying the exchange to this session and not to any TLS
     /// connection beneath it.
     ///
@@ -338,7 +364,7 @@ impl PairingSession {
     /// the client's address from a header you trust, or every joiner counts as the proxy.
     ///
     /// The joiner has until the smaller of the transport's own timeout, as
-    /// [`CurrentReadTimeout`] reports it, and [`PairingMethod::with_first_message_timeout`] to send
+    /// [`CurrentReadTimeout`] reports it, and [`PairingMethodBuilder::first_message_timeout`] to send
     /// its first message. From that message each read waits at most until the exchange's deadline,
     /// the desk's. When either runs out the joiner is told, and this is
     /// `Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. A time already spent is expired

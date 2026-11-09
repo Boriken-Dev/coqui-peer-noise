@@ -202,8 +202,9 @@ fn a_relay_cannot_answer_for_a_pinned_server_on_real_sockets() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let relay_key = coqui_peer_noise::Identity::generate().unwrap();
-    let as_relay = coqui_peer_noise::Noise::new(relay_key)
-        .with_initiators(coqui_peer_noise::Trust::pinned([client.peer_id()]));
+    let as_relay = coqui_peer_noise::Noise::builder(relay_key)
+        .initiators(coqui_peer_noise::Trust::pinned([client.peer_id()]))
+        .build();
     let relaying = thread::spawn(move || {
         let (mut socket, _) = listener.accept().unwrap();
         // It sees the failure as the connection going away.
@@ -231,13 +232,18 @@ fn a_relay_holding_a_run_with_each_end_cannot_pass_one_ends_records_to_the_other
         coqui_peer_noise::Identity::generate().unwrap(),
     );
     let pinned = |id| coqui_peer_noise::Trust::pinned([id]);
-    let dialing =
-        coqui_peer_noise::Noise::new(client.clone()).with_responders(pinned(relay.peer_id()));
-    let relay_answers =
-        coqui_peer_noise::Noise::new(relay.clone()).with_initiators(pinned(client.peer_id()));
-    let relay_dials =
-        coqui_peer_noise::Noise::new(relay.clone()).with_responders(pinned(server.peer_id()));
-    let listening = coqui_peer_noise::Noise::new(server).with_initiators(pinned(relay.peer_id()));
+    let dialing = coqui_peer_noise::Noise::builder(client.clone())
+        .responders(pinned(relay.peer_id()))
+        .build();
+    let relay_answers = coqui_peer_noise::Noise::builder(relay.clone())
+        .initiators(pinned(client.peer_id()))
+        .build();
+    let relay_dials = coqui_peer_noise::Noise::builder(relay.clone())
+        .responders(pinned(server.peer_id()))
+        .build();
+    let listening = coqui_peer_noise::Noise::builder(server)
+        .initiators(pinned(relay.peer_id()))
+        .build();
     let sockets = sockets();
     let (outer, inner) = (
         sockets.outer.local_addr().unwrap(),
@@ -299,7 +305,7 @@ fn a_binding_refuses_a_relay_that_ends_the_outer_channel_on_real_sockets() {
         let handshake = dialing
             .initiate()
             .unwrap()
-            .with_binding(b"client's TLS")
+            .binding(b"client's TLS")
             .unwrap();
         drive_stream(handshake, &mut socket).map(|_| ())
     });
@@ -309,7 +315,7 @@ fn a_binding_refuses_a_relay_that_ends_the_outer_channel_on_real_sockets() {
         let handshake = listening
             .respond(None)
             .unwrap()
-            .with_binding(b"server's TLS")
+            .binding(b"server's TLS")
             .unwrap();
         drive_stream(handshake, &mut socket).map(|_| ())
     });

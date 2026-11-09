@@ -8,7 +8,9 @@ mod support;
 use std::path::PathBuf;
 
 use coqui_peer::{Handshake, Method};
-use coqui_peer_noise::{Error, Identity, Noise, NoiseHandshake, PROFILE, PROTOCOL_NAME, Trust};
+use coqui_peer_noise::{
+    DEFAULT_KEY_LIMIT, Error, Identity, Noise, NoiseHandshake, PROFILE, PROTOCOL_NAME, Trust,
+};
 use data_encoding::HEXLOWER;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -45,15 +47,27 @@ fn prologue(binding: &[u8]) -> Vec<u8> {
 }
 
 fn initiator() -> Noise {
-    Noise::new(identity_of(INITIATOR_STATIC))
-        .with_responders(Trust::pinned([identity_of(RESPONDER_STATIC).peer_id()]))
-        .with_random(scripted(&[INITIATOR_EPHEMERAL]))
+    initiator_limited(DEFAULT_KEY_LIMIT)
+}
+
+fn initiator_limited(key_limit: u64) -> Noise {
+    Noise::builder(identity_of(INITIATOR_STATIC))
+        .responders(Trust::pinned([identity_of(RESPONDER_STATIC).peer_id()]))
+        .random(scripted(&[INITIATOR_EPHEMERAL]))
+        .key_limit(key_limit)
+        .build()
 }
 
 fn responder() -> Noise {
-    Noise::new(identity_of(RESPONDER_STATIC))
-        .with_initiators(Trust::pinned([identity_of(INITIATOR_STATIC).peer_id()]))
-        .with_random(scripted(&[RESPONDER_EPHEMERAL]))
+    responder_limited(DEFAULT_KEY_LIMIT)
+}
+
+fn responder_limited(key_limit: u64) -> Noise {
+    Noise::builder(identity_of(RESPONDER_STATIC))
+        .initiators(Trust::pinned([identity_of(INITIATOR_STATIC).peer_id()]))
+        .random(scripted(&[RESPONDER_EPHEMERAL]))
+        .key_limit(key_limit)
+        .build()
 }
 
 fn side(identity: &Identity, raw: [u8; 32], ephemeral: [u8; 32]) -> Value {
@@ -394,10 +408,9 @@ fn build() -> Value {
     let (close_near, close_far) = (near.close().unwrap(), far.close().unwrap());
 
     // The same run under a small key limit: the third record starts by changing the key.
-    let limited = |method: Noise| method.with_key_limit(KEY_LIMIT);
     let (mut a, mut b) = (
-        limited(initiator()).initiate().unwrap(),
-        limited(responder()).respond(None).unwrap(),
+        initiator_limited(KEY_LIMIT).initiate().unwrap(),
+        responder_limited(KEY_LIMIT).respond(None).unwrap(),
     );
     support::exchange(&mut a, &mut b).unwrap();
     let mut limited_near = a.finish().unwrap().session;
@@ -415,16 +428,8 @@ fn build() -> Value {
 
     // The same run with a binding.
     let (mut a, mut b) = (
-        initiator()
-            .initiate()
-            .unwrap()
-            .with_binding(BINDING)
-            .unwrap(),
-        responder()
-            .respond(None)
-            .unwrap()
-            .with_binding(BINDING)
-            .unwrap(),
+        initiator().initiate().unwrap().binding(BINDING).unwrap(),
+        responder().respond(None).unwrap().binding(BINDING).unwrap(),
     );
     let [bound_first, bound_second, bound_third] = support::messages(&mut a, &mut b).unwrap();
     let bound_id = *a.finish().unwrap().session.id();

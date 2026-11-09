@@ -881,11 +881,3 @@ test('Rust\'s records of a wrong PIN are reproduced to the byte, in both roles, 
   assert.deepEqual(responding.done(), {sent: 2, expected: 2});
 });
 
-test('weakened() is the old name of nonDefaults()', async () => {
-  const [a, b] = [await generateIdentity(), await generateIdentity()];
-  const initiator = await createInitiator(a, b.peerId, {rekey: false});
-  assert.deepEqual(initiator.weakened(), initiator.nonDefaults());
-  const desk = createPairingDesk({pinLength: 1});
-  assert.deepEqual(desk.weakened(), desk.nonDefaults());
-  assert.equal(desk.weakened().length, 1);
-});
