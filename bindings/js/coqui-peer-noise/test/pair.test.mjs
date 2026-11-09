@@ -633,29 +633,37 @@ test('a record longer than any of the exchange is refused before it is opened, i
   await assert.rejects(pairing.respond(desk, fed(huge), {accept: async () => assert.fail('not accepted')}), /malformed/);
 });
 
-test('nonDefaults() names each setting looser than its default, and nothing else', async () => {
+test('nonDefaults() names each setting that differs from its default by its Rust key path, and nothing else', async () => {
   const [a, b] = [await generateIdentity(), await generateIdentity()];
   const names = object => object.nonDefaults().map(({setting}) => setting);
   const replaced = async () => webcrypto.subtle.generateKey('X25519', false, ['deriveBits']);
   assert.deepEqual(names(await createInitiator(a, b.peerId)), []);
   assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: DEFAULT_KEY_LIMIT})), []);
-  assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: 16})), []);
-  assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: DEFAULT_KEY_LIMIT + 1})), ['keyLimit']);
+  assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: 16})), ['key_limit']);
+  assert.deepEqual(names(await createInitiator(a, b.peerId, {keyLimit: DEFAULT_KEY_LIMIT + 1})), ['key_limit']);
   assert.deepEqual(names(await createInitiator(a, b.peerId, {rekey: false})), ['rekey']);
   assert.deepEqual(names(await createInitiator(a, b.peerId, {ephemeral: replaced})), ['ephemeral']);
   assert.deepEqual(names(await createResponder(b, {allowClient: async () => true, rekey: false})), ['rekey']);
-  assert.deepEqual((await createInitiator(a, b.peerId, {rekey: false})).nonDefaults(), [{setting: 'rekey', value: 'off', default: 'on'}]);
+  assert.deepEqual((await createInitiator(a, b.peerId, {rekey: false})).nonDefaults(), [{setting: 'rekey', value: 'false', default: 'true'}]);
+  assert.deepEqual(
+    (await createInitiator(a, b.peerId, {keyLimit: 16})).nonDefaults(),
+    [{setting: 'key_limit', value: '16', default: String(DEFAULT_KEY_LIMIT)}],
+  );
 
   // Admitting any proved key is what pairing is: it is not listed.
   assert.deepEqual(names(await createPairingInitiator(a)), []);
   assert.deepEqual(names(await createPairingInitiator(a, {responder: b.peerId})), []);
   assert.deepEqual(names(await createPairingInitiator(a, {responder: b.peerId, random: () => new Uint8Array(64)})), ['random']);
   assert.deepEqual(names(await createPairingResponder(b)), []);
-  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: 0})), []);
+  assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: 0})), ['first_message_timeout']);
   assert.deepEqual(names(await createPairingResponder(b, {firstMessageTimeout: DEFAULT_FIRST_MESSAGE_TIMEOUT})), []);
   assert.deepEqual(
     names(await createPairingResponder(b, {firstMessageTimeout: DEFAULT_FIRST_MESSAGE_TIMEOUT + 1, rekey: false})),
-    ['rekey', 'firstMessageTimeout'],
+    ['rekey', 'first_message_timeout'],
+  );
+  assert.deepEqual(
+    (await createPairingResponder(b, {firstMessageTimeout: 1500})).nonDefaults(),
+    [{setting: 'first_message_timeout', value: '[1,500000000]', default: '[60,0]'}],
   );
 
   // The desk, by what a guess's chance and a PIN's life come to.

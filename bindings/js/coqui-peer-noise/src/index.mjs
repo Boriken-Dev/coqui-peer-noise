@@ -577,15 +577,21 @@ function options({keyLimit = DEFAULT_KEY_LIMIT, rekey = true, binding = new Uint
   };
 }
 
-/** One setting looser than its default, as Rust's `NonDefault`: reported, never refused. */
+/** One setting that differs from its default, as Rust's `NonDefault`: reported, never refused. */
 function nonDefault(setting, value, standard) {
   return Object.freeze({setting, value: String(value), default: String(standard)});
 }
 
+/** A span of milliseconds as the text Rust gives a `Duration`: `[secs,nanos]`. */
+function durationText(milliseconds) {
+  const secs = Math.floor(milliseconds / 1000);
+  return `[${secs},${Math.round((milliseconds - secs * 1000) * 1e6)}]`;
+}
+
 function nonDefaultSettings(settings) {
   const found = [];
-  if (settings.keyLimit > DEFAULT_KEY_LIMIT) found.push(nonDefault('keyLimit', settings.keyLimit, DEFAULT_KEY_LIMIT));
-  if (!settings.rekey) found.push(nonDefault('rekey', 'off', 'on'));
+  if (settings.keyLimit !== DEFAULT_KEY_LIMIT) found.push(nonDefault('key_limit', settings.keyLimit, DEFAULT_KEY_LIMIT));
+  if (!settings.rekey) found.push(nonDefault('rekey', false, true));
   if (settings.ephemeralReplaced) found.push(nonDefault('ephemeral', "caller's", "the engine's"));
   return found;
 }
@@ -656,13 +662,13 @@ export async function importIdentity(pkcs8) {
 
 /**
  * The dialling side's state machine; `admit` decides on the proved id, and `finish` gives the result.
- * `looser` is what a caller adds to `nonDefaults()`.
+ * `extra` is what a caller adds to `nonDefaults()`.
  */
 async function dialling(local, purpose, settings, looser, admit, finish) {
   const handshake = await newHandshake(true, prologueOf(purpose, settings), local, await newEphemeral(settings));
   let state = 'start';
   return Object.freeze({
-    /** The settings looser than their default: `[{setting, value, default}]`. */
+    /** The settings that differ from their default: `[{setting, value, default}]`, named as Rust names them. */
     nonDefaults: () => [...nonDefaultSettings(settings), ...looser],
     /** The first message. */
     async hello() {
@@ -699,7 +705,7 @@ async function accepting(local, purpose, settings, looser, admit, finish) {
   let state = 'first';
   let handshake;
   return Object.freeze({
-    /** The settings looser than their default: `[{setting, value, default}]`. */
+    /** The settings that differ from their default: `[{setting, value, default}]`, named as Rust names them. */
     nonDefaults: () => [...nonDefaultSettings(settings), ...looser],
     /** Takes the first message, and gives the second. */
     async challenge(raw) {
@@ -1095,7 +1101,7 @@ export function createPairingDesk({
     }
   };
   const desk = Object.freeze({
-    /** The options looser than their default: `[{setting, value, default}]`. */
+    /** The options that differ from their default: `[{setting, value, default}]`. */
     nonDefaults() {
       const found = [];
       const combinations = alphabet.length ** pinLength;
@@ -1339,8 +1345,8 @@ export async function createPairingResponder(identity, {firstMessageTimeout = DE
   const settings = options(config);
   const local = await checkIdentity(identity);
   const looser = [];
-  if (firstMessageTimeout > DEFAULT_FIRST_MESSAGE_TIMEOUT) {
-    looser.push(nonDefault('firstMessageTimeout', firstMessageTimeout, DEFAULT_FIRST_MESSAGE_TIMEOUT));
+  if (firstMessageTimeout !== DEFAULT_FIRST_MESSAGE_TIMEOUT) {
+    looser.push(nonDefault('first_message_timeout', durationText(firstMessageTimeout), durationText(DEFAULT_FIRST_MESSAGE_TIMEOUT)));
   }
   return accepting(local, PURPOSE_PAIR, settings, looser, async () => {}, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM, firstMessageTimeout),

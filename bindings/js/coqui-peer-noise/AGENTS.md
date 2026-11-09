@@ -69,9 +69,10 @@ export const __testing;            // not API: the layer beneath, for the publis
 The module reads `seal` and `open` input, and the options, when called, so the caller may reuse its buffer. Calls made together take
 their place in call order.
 
-A setting is never refused for differing from its default, so **`nonDefaults()` says which do**: `[{setting, value, default}]`, each one looser than
-its default, as text (`weakened()` is its old name, kept one release). On the objects `createInitiator` and its like give: `keyLimit` above the default, `rekey` off, a replaced
-`ephemeral` or `random`, and a larger `firstMessageTimeout`; admitting any proved key is what a pairing starter is, so it is not listed. On a desk: fewer `pinCombinations`, more `pinAttempts`, a longer `pinTtl`, a replaced `random` or `now`.
+A setting is never refused for differing from its default, so **`nonDefaults()` says which do**: `[{setting, value, default}]`, each one that differs from
+its default, as text. On the objects `createInitiator` and its like give, named as Rust names them and with the text Rust gives:
+`key_limit` (a number), `rekey` (`false` against `true`), `first_message_timeout` (`[secs,nanos]`, as a duration) and a replaced
+`ephemeral` or `random`; admitting any proved key is what a pairing starter is, so it is not listed. On a desk: fewer `pinCombinations`, more `pinAttempts`, a longer `pinTtl`, a replaced `random` or `now`.
 
 An identity's private key must be non-extractable and X25519, and `peerId` must be the hash of `publicKey`, or
 `createInitiator` and `createResponder` throw. `openssl pkey -pubout -outform DER | sha256sum` gives a key's id. Each
