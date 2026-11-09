@@ -302,11 +302,7 @@ fn a_binding_refuses_a_relay_that_ends_the_outer_channel_on_real_sockets() {
     let outer = sockets.outer.local_addr().unwrap();
     let dial = thread::spawn(move || {
         let mut socket = TcpStream::connect(outer).unwrap();
-        let handshake = dialing
-            .initiate()
-            .unwrap()
-            .binding(b"client's TLS")
-            .unwrap();
+        let handshake = dialing.initiate().unwrap().bind(b"client's TLS").unwrap();
         drive_stream(handshake, &mut socket).map(|_| ())
     });
     let (mut near, mut far, inner) = sockets.relay_ends();
@@ -315,7 +311,7 @@ fn a_binding_refuses_a_relay_that_ends_the_outer_channel_on_real_sockets() {
         let handshake = listening
             .respond(None)
             .unwrap()
-            .binding(b"server's TLS")
+            .bind(b"server's TLS")
             .unwrap();
         drive_stream(handshake, &mut socket).map(|_| ())
     });

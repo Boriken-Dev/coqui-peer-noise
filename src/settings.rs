@@ -46,7 +46,8 @@ impl Default for NoiseSettings {
 /// [`NoiseSettings`] keys and how long a responder waits for a joiner.
 ///
 /// Read as [`NoiseSettings`] is. `first_message_timeout` is a duration (a number of seconds,
-/// `[secs, nanos]` or `{secs, nanos}`); an absent key is [`DEFAULT_FIRST_MESSAGE_TIMEOUT`].
+/// `[secs, nanos]` or `{secs, nanos}`); an absent key is `None`, no bound but the transport's,
+/// where [`Default`] is `Some(`[`DEFAULT_FIRST_MESSAGE_TIMEOUT`]`)`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema,
 )]
@@ -60,11 +61,13 @@ pub struct PairingSettings {
     #[map(default = PairingSettings::default().rekey)]
     pub rekey: bool,
     /// How long a responder waits for the joiner's first message; a timeout set on the transport
-    /// still applies if it is shorter. No floor: zero refuses as expired without reading.
-    /// [`Duration::MAX`] leaves the transport's own timeout as the only bound, and over a transport
-    /// with none a silent stranger holds it until it closes.
-    #[map(default = PairingSettings::default().first_message_timeout)]
-    pub first_message_timeout: Duration,
+    /// still applies if it is shorter. `Some(Duration::ZERO)` is refused when the method is built.
+    /// `None` leaves the transport's own timeout as the only bound, and over a transport with none
+    /// a silent stranger holds it until it closes.
+    // The derive cannot default an `Option`, so a document that leaves the key out reads `None`,
+    // not `Some(DEFAULT_FIRST_MESSAGE_TIMEOUT)` as `Default` does, and `non_defaults` compares
+    // this key by hand. The derive's `default = Some(..), none = "never"` replaces both.
+    pub first_message_timeout: Option<Duration>,
 }
 
 impl Default for PairingSettings {
@@ -72,7 +75,7 @@ impl Default for PairingSettings {
         Self {
             key_limit: DEFAULT_KEY_LIMIT,
             rekey: true,
-            first_message_timeout: DEFAULT_FIRST_MESSAGE_TIMEOUT,
+            first_message_timeout: Some(DEFAULT_FIRST_MESSAGE_TIMEOUT),
         }
     }
 }

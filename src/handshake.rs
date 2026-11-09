@@ -193,6 +193,13 @@ impl Noise {
     }
 }
 
+impl Noise {
+    /// Whether the ephemeral keys come from a caller's random source.
+    pub(crate) fn random_replaced(&self) -> bool {
+        self.0.random_replaced
+    }
+}
+
 impl fmt::Debug for Noise {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -299,7 +306,7 @@ impl NoiseHandshake {
     ///
     /// [`Error::State`] after the first [`transmit`](Handshake::transmit) or
     /// [`receive`](Handshake::receive): the prologue is fixed by then.
-    pub fn binding(mut self, binding: &[u8]) -> Result<Self, Error> {
+    pub fn bind(mut self, binding: &[u8]) -> Result<Self, Error> {
         if !matches!(self.state, State::Start(_) | State::AwaitFirst) {
             return Err(Error::State);
         }

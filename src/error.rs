@@ -45,6 +45,8 @@ pub enum Error {
     Key,
     /// A pairing exchange was refused, by this side or the other, or did not follow its protocol.
     Pairing(PairingError),
+    /// A setting is outside what it can hold: a first-message timeout of zero.
+    Settings,
     /// Reading or writing an identity file, or a transport a pairing exchange runs on, failed.
     Io(io::Error),
 }
@@ -64,6 +66,7 @@ impl fmt::Display for Error {
             Self::LimitReached => "a key reached its limit",
             Self::TooLong => "the export is over what HKDF can give",
             Self::Key => "not an X25519 PKCS#8 private key",
+            Self::Settings => "a setting is outside what it can hold",
             Self::Pairing(_) => "the pairing exchange failed",
             Self::Io(_) => "an identity file or a transport failed",
         })

@@ -66,10 +66,12 @@ fn joining(pin: &str) -> Pairing {
 fn sessions() -> (PairingSession, PairingSession, [Vec<u8>; 3]) {
     let near = PairingMethod::builder(identity_of(JOINER_STATIC))
         .random(scripted(&[JOINER_EPHEMERAL]))
-        .build();
+        .build()
+        .unwrap();
     let far = PairingMethod::builder(identity_of(RESPONDER_STATIC))
         .random(scripted(&[RESPONDER_EPHEMERAL]))
-        .build();
+        .build()
+        .unwrap();
     let (mut a, mut b) = (near.initiate().unwrap(), far.respond(None).unwrap());
     let first = a.transmit().unwrap().unwrap();
     b.receive(&first).unwrap();

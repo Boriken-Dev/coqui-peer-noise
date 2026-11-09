@@ -428,8 +428,8 @@ fn build() -> Value {
 
     // The same run with a binding.
     let (mut a, mut b) = (
-        initiator().initiate().unwrap().binding(BINDING).unwrap(),
-        responder().respond(None).unwrap().binding(BINDING).unwrap(),
+        initiator().initiate().unwrap().bind(BINDING).unwrap(),
+        responder().respond(None).unwrap().bind(BINDING).unwrap(),
     );
     let [bound_first, bound_second, bound_third] = support::messages(&mut a, &mut b).unwrap();
     let bound_id = *a.finish().unwrap().session.id();

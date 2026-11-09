@@ -18,6 +18,7 @@ pub coqui_peer_noise::Error::Malformed
 pub coqui_peer_noise::Error::Pairing(coqui_peer::pair::PairingError)
 pub coqui_peer_noise::Error::Random
 pub coqui_peer_noise::Error::Record
+pub coqui_peer_noise::Error::Settings
 pub coqui_peer_noise::Error::State
 pub coqui_peer_noise::Error::TooLong
 pub coqui_peer_noise::Error::Truncated
@@ -90,7 +91,7 @@ pub fn coqui_peer_noise::NoiseBuilder::responders(self, coqui_peer_noise::Trust)
 pub fn coqui_peer_noise::NoiseBuilder::settings(self, coqui_peer_noise::NoiseSettings) -> Self
 pub struct coqui_peer_noise::NoiseHandshake
 impl coqui_peer_noise::NoiseHandshake
-pub fn coqui_peer_noise::NoiseHandshake::binding(self, &[u8]) -> core::result::Result<Self, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::NoiseHandshake::bind(self, &[u8]) -> core::result::Result<Self, coqui_peer_noise::Error>
 impl coqui_peer::method::Handshake for coqui_peer_noise::NoiseHandshake
 pub type coqui_peer_noise::NoiseHandshake::Error = coqui_peer_noise::Error
 pub type coqui_peer_noise::NoiseHandshake::Output = coqui_peer_noise::Session
@@ -144,8 +145,8 @@ impl core::fmt::Debug for coqui_peer_noise::PairingMethod
 pub fn coqui_peer_noise::PairingMethod::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct coqui_peer_noise::PairingMethodBuilder
 impl coqui_peer_noise::PairingMethodBuilder
-pub fn coqui_peer_noise::PairingMethodBuilder::build(self) -> coqui_peer_noise::PairingMethod
-pub fn coqui_peer_noise::PairingMethodBuilder::first_message_timeout(self, core::time::Duration) -> Self
+pub fn coqui_peer_noise::PairingMethodBuilder::build(self) -> core::result::Result<coqui_peer_noise::PairingMethod, coqui_peer_noise::Error>
+pub fn coqui_peer_noise::PairingMethodBuilder::first_message_timeout(self, impl core::convert::Into<core::option::Option<core::time::Duration>>) -> Self
 pub fn coqui_peer_noise::PairingMethodBuilder::key_limit(self, u64) -> Self
 pub fn coqui_peer_noise::PairingMethodBuilder::random(self, coqui_peer::random::Random) -> Self
 pub fn coqui_peer_noise::PairingMethodBuilder::rekey(self, bool) -> Self
@@ -162,7 +163,7 @@ pub fn coqui_peer_noise::PairingSession::respond<T: coqui_peer::drive::MessageTr
 impl core::fmt::Debug for coqui_peer_noise::PairingSession
 pub fn coqui_peer_noise::PairingSession::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct coqui_peer_noise::PairingSettings
-pub coqui_peer_noise::PairingSettings::first_message_timeout: core::time::Duration
+pub coqui_peer_noise::PairingSettings::first_message_timeout: core::option::Option<core::time::Duration>
 pub coqui_peer_noise::PairingSettings::key_limit: u64
 pub coqui_peer_noise::PairingSettings::rekey: bool
 impl core::default::Default for coqui_peer_noise::PairingSettings

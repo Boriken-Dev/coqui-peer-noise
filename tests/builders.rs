@@ -74,24 +74,27 @@ fn every_pairing_setter_reaches_the_method() {
         .key_limit(2000)
         .rekey(false)
         .first_message_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
     let settings = method.settings();
     assert_eq!(settings.key_limit, 2000);
     assert!(!settings.rekey);
-    assert_eq!(settings.first_message_timeout, Duration::from_secs(5));
+    assert_eq!(settings.first_message_timeout, Some(Duration::from_secs(5)));
     assert_eq!(method.non_defaults().len(), 3);
 
     let unbounded = PairingMethod::builder(Identity::generate().unwrap())
-        .first_message_timeout(Duration::MAX)
-        .build();
-    assert_eq!(unbounded.settings().first_message_timeout, Duration::MAX);
+        .first_message_timeout(None)
+        .build()
+        .unwrap();
+    assert_eq!(unbounded.settings().first_message_timeout, None);
 
     let mut whole = PairingSettings::default();
-    whole.first_message_timeout = Duration::from_secs(9);
+    whole.first_message_timeout = Some(Duration::from_secs(9));
     let method = PairingMethod::builder(Identity::generate().unwrap())
         .first_message_timeout(Duration::from_secs(1))
         .settings(whole)
-        .build();
+        .build()
+        .unwrap();
     assert_eq!(method.settings(), whole);
 }
 
@@ -107,15 +110,17 @@ fn the_defaults_report_nothing() {
     assert!(
         PairingMethod::builder(identity)
             .build()
+            .unwrap()
             .non_defaults()
             .is_empty()
     );
     assert_eq!(
         PairingMethod::builder(Identity::generate().unwrap())
             .build()
+            .unwrap()
             .settings()
             .first_message_timeout,
-        DEFAULT_FIRST_MESSAGE_TIMEOUT
+        Some(DEFAULT_FIRST_MESSAGE_TIMEOUT)
     );
 }
 
@@ -132,7 +137,7 @@ fn settings_read_from_toml_and_json_and_round_trip() {
     let mut pairing = PairingSettings::default();
     pairing.key_limit = 6;
     pairing.rekey = false;
-    pairing.first_message_timeout = Duration::from_millis(1500);
+    pairing.first_message_timeout = Some(Duration::from_millis(1500));
     let text = toml::to_string_of(&pairing, plain()).unwrap();
     assert_eq!(
         toml::from_str_as::<PairingSettings>(&text, plain()).unwrap(),
@@ -150,4 +155,58 @@ fn settings_refuse_unknown_keys() {
     assert!(toml::from_str_as::<NoiseSettings>("keylimit = 1", plain()).is_err());
     assert!(toml::from_str_as::<PairingSettings>("responders = []", plain()).is_err());
     assert!(toml::from_str_as::<NoiseSettings>("rekey = \"yes\"", plain()).is_err());
+}
+
+#[test]
+fn a_first_message_timeout_reads_seconds_and_round_trips() {
+    for (text, expected) in [
+        (
+            "first_message_timeout = 30
+",
+            Some(Duration::from_secs(30)),
+        ),
+        (
+            "first_message_timeout = 0.25
+",
+            Some(Duration::from_millis(250)),
+        ),
+        ("", None),
+    ] {
+        let settings: PairingSettings = toml::from_str_as(text, plain()).unwrap();
+        assert_eq!(settings.first_message_timeout, expected, "{text}");
+        let written = toml::to_string_of(&settings, plain()).unwrap();
+        assert_eq!(
+            toml::from_str_as::<PairingSettings>(&written, plain()).unwrap(),
+            settings,
+            "{text}"
+        );
+    }
+    assert!(
+        toml::from_str_as::<PairingSettings>("first_message_timeout = \"soon\"", plain()).is_err()
+    );
+}
+
+#[test]
+fn a_first_message_timeout_is_reported_under_its_key_when_it_differs() {
+    let method = PairingMethod::builder(Identity::generate().unwrap())
+        .first_message_timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    assert_eq!(
+        method.non_defaults(),
+        [NonDefault::new("first_message_timeout", "[30,0]", "[60,0]")]
+    );
+}
+
+#[test]
+fn no_first_message_timeout_is_reported_as_unset_against_the_default() {
+    let method = PairingMethod::builder(Identity::generate().unwrap())
+        .first_message_timeout(None)
+        .build()
+        .unwrap();
+    assert_eq!(method.settings().first_message_timeout, None);
+    let listed = method.non_defaults();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].setting, "first_message_timeout");
+    assert_eq!(listed[0].default, "[60,0]");
 }

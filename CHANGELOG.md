@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Breaking: a weakened setting is a non-default setting.** `Noise::non_defaults` and `PairingMethod::non_defaults` return coqui-peer's `NonDefault { setting, value, default }`,
   one for every setting that differs from its default, named by key path (`key_limit`, `rekey`, `first_message_timeout`),
-  and `random` when it is replaced. In the JavaScript module `nonDefaults()` has the same entries.
+  and `random` when it is replaced. In the JavaScript module `nonDefaults()` has the same entries, named by the same Rust key paths (`key_limit`, `rekey`,
+  `first_message_timeout`) with the same value text, and lists every difference, not only a looser one. The `weakened`
+  names are gone; nothing keeps an alias before a release without a pre-release tag.
 
 ### Removed
 
@@ -23,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Builders and settings.** `Noise::builder(identity)` and `PairingMethod::builder(identity)` set a method up by the
   setting's name (`responders`, `initiators`, `key_limit`, `rekey`, `random`, `first_message_timeout`, `settings`), then
   `build()`; there is no `new`. `NoiseSettings { key_limit, rekey }` and `PairingSettings` (those and
-  `first_message_timeout`, a duration where `Duration::MAX` leaves only the transport's own bound) are guatiao values a
-  file fills, and `settings(..)` takes one whole. `NoiseHandshake::binding` sets the outer-channel binding.
+  `first_message_timeout`, an `Option<Duration>`: `None` leaves only the transport's own bound, and `Some(Duration::ZERO)` is refused by
+  `build()`, which returns `Result<PairingMethod, Error>` with the new `Error::Settings`) are guatiao values a
+  file fills, and `settings(..)` takes one whole. `NoiseHandshake::bind` sets the outer-channel binding.
 - `Noise` and `NoiseHandshake`: the `coqui_peer::Method` named `noise`, as initiator and responder, running
   `Noise_XX_25519_AESGCM_SHA256` and ending in a `Session`.
 - `Session`, `Sealer`, `Opener`: Noise's handshake hash as an id both ends agree on, records of any length, `close`
@@ -41,12 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `PROTOCOL.md`, the published vectors in `tests/vectors/published.json`, and the shared vectors in
   `tests/vectors/session.json`.
 - `PairingMethod`, `PairingSession` and `PairDial`, with the `pin` feature: `coqui_peer::pair` sealed in a session of its own.
-  A stranger's session can carry nothing else. `with_first_message_timeout` and `DEFAULT_FIRST_MESSAGE_TIMEOUT` bound how long
+  A stranger's session can carry nothing else. `first_message_timeout` and `DEFAULT_FIRST_MESSAGE_TIMEOUT` bound how long
   a stranger may say nothing, and it is told `Expired` when that runs out.
 - `createPairingInitiator`, `createPairingResponder` and `createPairingDesk` in the JavaScript module: a typed PIN in both
   roles, the same bytes as Rust, over `BigInt` arithmetic that is not constant-time. `firstMessageTimeout` and
   `DEFAULT_FIRST_MESSAGE_TIMEOUT` bound how long a stranger may say nothing, and it is told `expired` when that runs out.
-- `weakened()` on what the JavaScript module's starters give and on its desk, and `MAX_PAIRING_RECORD`, as in Rust.
+- `nonDefaults()` on what the JavaScript module's starters give and on its desk, and `MAX_PAIRING_RECORD`, as in Rust.
 - `tests/vectors/pairing.json` and `tests/vectors/spake2.json`.
 - `tools/proxy-run`: a real nginx between a real browser and the Rust side, by hand and not in CI.
 

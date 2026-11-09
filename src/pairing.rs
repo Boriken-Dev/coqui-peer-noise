@@ -34,6 +34,11 @@ pub const MAX_PAIRING_RECORD: usize = 350;
 /// proved a key and says nothing holds a connection for this long, with no desk limit applying yet.
 pub const DEFAULT_FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// A duration as the text a settings value gives it, `[secs,nanos]`.
+fn duration_text(duration: Duration) -> String {
+    format!("[{},{}]", duration.as_secs(), duration.subsec_nanos())
+}
+
 /// `PROTOCOL.md`'s refused message: version, kind, why (expired). A [`PairingResponder`] has a
 /// deadline to refuse by only from the joiner's first message.
 const EXPIRED_REFUSAL: [u8; 3] = [1, 8, 2];
@@ -54,11 +59,6 @@ pub struct PairingMethod {
     first_message_timeout: Option<Duration>,
 }
 
-/// The bound a [`Duration`] stands for: none for [`Duration::MAX`].
-fn bounded(timeout: Duration) -> Option<Duration> {
-    (timeout != Duration::MAX).then_some(timeout)
-}
-
 /// Builds a [`PairingMethod`]: [`PairingMethod::builder`], the settings, then
 /// [`build`](Self::build).
 #[derive(Debug, Clone)]
@@ -77,9 +77,11 @@ impl PairingMethodBuilder {
     }
 
     /// How long [`PairingSession::respond`] waits for the joiner's first message; see
-    /// [`PairingSettings::first_message_timeout`]; [`Duration::MAX`] is no bound but the transport's. [`DEFAULT_FIRST_MESSAGE_TIMEOUT`] by default.
-    pub fn first_message_timeout(mut self, timeout: Duration) -> Self {
-        self.first_message_timeout = bounded(timeout);
+    /// [`PairingSettings::first_message_timeout`]. `None` leaves the transport's own bound as the
+    /// only one; `Some(Duration::ZERO)` is refused by [`build`](Self::build).
+    /// [`DEFAULT_FIRST_MESSAGE_TIMEOUT`] by default.
+    pub fn first_message_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.first_message_timeout = timeout.into();
         self
     }
 
@@ -106,16 +108,23 @@ impl PairingMethodBuilder {
     /// setters set before, and is replaced by what they set after it.
     pub fn settings(mut self, settings: PairingSettings) -> Self {
         self.noise = self.noise.settings(settings.noise());
-        self.first_message_timeout = bounded(settings.first_message_timeout);
+        self.first_message_timeout = settings.first_message_timeout;
         self
     }
 
     /// The method.
-    pub fn build(self) -> PairingMethod {
-        PairingMethod {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Settings`] when the first-message timeout is `Some(Duration::ZERO)`.
+    pub fn build(self) -> Result<PairingMethod, Error> {
+        if self.first_message_timeout == Some(Duration::ZERO) {
+            return Err(Error::Settings);
+        }
+        Ok(PairingMethod {
             noise: self.noise.build(),
             first_message_timeout: self.first_message_timeout,
-        }
+        })
     }
 }
 
@@ -142,7 +151,7 @@ impl PairingMethod {
         PairingSettings {
             key_limit: noise.key_limit,
             rekey: noise.rekey,
-            first_message_timeout: self.first_message_timeout.unwrap_or(Duration::MAX),
+            first_message_timeout: self.first_message_timeout,
         }
     }
 
@@ -151,13 +160,18 @@ impl PairingMethod {
     /// by definition, so that is not listed.
     #[must_use]
     pub fn non_defaults(&self) -> Vec<NonDefault> {
-        let mut non_defaults = NonDefault::of_settings(&self.settings());
-        let random = self
-            .noise
-            .non_defaults()
-            .into_iter()
-            .filter(|setting| setting.setting == "random");
-        non_defaults.extend(random);
+        let mut non_defaults = NonDefault::of_settings(&self.settings().noise());
+        if self.first_message_timeout != Some(DEFAULT_FIRST_MESSAGE_TIMEOUT) {
+            non_defaults.push(NonDefault::new(
+                "first_message_timeout",
+                self.first_message_timeout
+                    .map_or_else(|| "never".into(), duration_text),
+                duration_text(DEFAULT_FIRST_MESSAGE_TIMEOUT),
+            ));
+        }
+        if self.noise.random_replaced() {
+            non_defaults.push(NonDefault::new("random", "caller's", "operating system's"));
+        }
         non_defaults
     }
 }

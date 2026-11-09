@@ -15,7 +15,7 @@ of `coqui-peer` (`PeerId`, `TrustStore`, the sans-IO `Handshake`); its API heade
 `PROTOCOL.md` ships here and is the wire.
 
 Imports: everything is at the crate root, including re-exports of `coqui-peer`'s `Established`,
-`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore`, `NonDefault` and `pair`; `Weakening` is a deprecated alias of `NonDefault` for one release.
+`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore`, `NonDefault` and `pair`.
 
 No `unsafe` code (`#![forbid(unsafe_code)]`), no process-wide state. Nothing reads a file or an
 environment variable unless the caller names a path. Ephemeral and long-term keys, every chaining key, the export
@@ -101,7 +101,7 @@ impl NoiseBuilder {
 impl coqui_peer::Method for Noise { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct NoiseHandshake;
 impl NoiseHandshake {
-    pub fn binding(self, binding: &[u8]) -> Result<NoiseHandshake, Error>;   // Error::State once the prologue is fixed
+    pub fn bind(self, binding: &[u8]) -> Result<NoiseHandshake, Error>;   // Error::State once the prologue is fixed
 }
 pub const MAX_HANDSHAKE_MESSAGE: usize = 96;
 pub struct FramedStream<S>;                   // Debug
@@ -131,7 +131,7 @@ ephemeral key and the first `transmit` gives the first message; `Error::Unsuppor
 **An initiator finishes on sending the third message, and does not yet know it was accepted**: a responder that
 refuses it ends the connection. Records it sends meanwhile go only to the responder it proved.
 
-`binding` is for an endpoint that really ends a TLS connection itself: pass that connection's
+`bind` is for an endpoint that really ends a TLS connection itself: pass that connection's
 exporter at both ends, and a relay ending TLS on both sides fails with `Error::BadProof`. Never set it
 through a reverse proxy, where the two ends read different values. It is never sent. Set it before the first
 `transmit` or `receive`.
@@ -200,17 +200,17 @@ impl PairingMethod {
     pub fn settings(&self) -> PairingSettings;
     pub fn non_defaults(&self) -> Vec<NonDefault>;    // every PairingSettings key that differs, by key path; `random` when replaced (admitting any proved key is what pairing is, not listed)
 }
-pub struct PairingMethodBuilder;              // Clone; Debug; build() -> PairingMethod
+pub struct PairingMethodBuilder;              // Clone; Debug; build() -> Result<PairingMethod, Error>   (Error::Settings for Some(Duration::ZERO) as the first-message timeout)
 impl PairingMethodBuilder {
     pub fn responders(self, trust: Trust) -> PairingMethodBuilder;   // a joiner verifies the responder
-    pub fn first_message_timeout(self, timeout: Duration) -> PairingMethodBuilder;   // no floor; Duration::MAX leaves the transport'"'"'s own
+    pub fn first_message_timeout(self, timeout: impl Into<Option<Duration>>) -> PairingMethodBuilder;   // None leaves the transport's own bound; Some(ZERO) is refused by build()
     pub fn key_limit(self, bytes: u64) -> PairingMethodBuilder;
     pub fn rekey(self, rekey: bool) -> PairingMethodBuilder;
     pub fn random(self, random: Random) -> PairingMethodBuilder;
     pub fn settings(self, settings: PairingSettings) -> PairingMethodBuilder;
 }
-// As NoiseSettings, with `first_message_timeout: Duration` (a number of seconds in text); Default: DEFAULT_KEY_LIMIT, true, 60 s
-#[non_exhaustive] pub struct PairingSettings { pub key_limit: u64, pub rekey: bool, pub first_message_timeout: Duration }
+// As NoiseSettings, with `first_message_timeout: Option<Duration>` (a number of seconds; an absent key is None until the derive's `default = Some(..), none = "never"` lands); Default: DEFAULT_KEY_LIMIT, true, Some(60 s)
+#[non_exhaustive] pub struct PairingSettings { pub key_limit: u64, pub rekey: bool, pub first_message_timeout: Option<Duration> }
 impl coqui_peer::Method for PairingMethod { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct PairingHandshake;  // impl Handshake { Output = PairingSession, Framing::Message }
 pub struct PairingSession;    // no seal, no open: it runs one exchange
@@ -238,8 +238,8 @@ as `Noise`'s, then `join` or `respond`, which seal every message and end with a 
 proves.
 
 **A stranger's time is bounded.** Before the joiner's first message `respond` waits for the smaller of the transport's
-`current_read_timeout` and `first_message_timeout`, `DEFAULT_FIRST_MESSAGE_TIMEOUT` unless set, zero refusing with
-nothing read and `Duration::MAX` leaving only the transport's own. So ask a person for the PIN before connecting, or raise this. From
+`current_read_timeout` and `first_message_timeout`, `DEFAULT_FIRST_MESSAGE_TIMEOUT` unless set, `None` leaving only
+the transport's own and `Some(Duration::ZERO)` refused when the method is built. So ask a person for the PIN before connecting, or raise this. From
 that message each read waits until the desk's deadline. Either running out tells the joiner and returns
 `Error::Pairing(PairingError::Refused(PairRefusal::Expired))`. Over a `FramedStream` the bound holds however slowly the bytes
 come; another transport must make a whole `recv` obey its timeout. `drive_messages_until` clears the timeout it used, so

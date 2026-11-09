@@ -21,7 +21,7 @@ use coqui_peer::{
 use coqui_peer_noise::{
     CurrentReadTimeout, DEFAULT_FIRST_MESSAGE_TIMEOUT, Error, FramedStream, Identity,
     MAX_HANDSHAKE_MESSAGE, MAX_PAIRING_RECORD, MessageTransport, Noise, PROFILE, PROTOCOL_NAME,
-    PairingMethod, PairingSession, Trust, TrustStore, random,
+    PairingMethod, PairingSession, PairingSettings, Trust, TrustStore, random,
 };
 use support::{exchange, run};
 
@@ -89,8 +89,8 @@ fn pairing_run(
 
 fn strangers(joiner: &Identity, responder: &Identity) -> (PairingSession, PairingSession) {
     let (near, far) = pairing_run(
-        &PairingMethod::builder(joiner.clone()).build(),
-        &PairingMethod::builder(responder.clone()).build(),
+        &PairingMethod::builder(joiner.clone()).build().unwrap(),
+        &PairingMethod::builder(responder.clone()).build().unwrap(),
     )
     .unwrap();
     (near.session, far.session)
@@ -168,7 +168,7 @@ fn a_pairing_session_holds_a_key_and_is_nobody() {
     assert_eq!(at_joiner.binding, at_responder.binding);
     assert_eq!(at_joiner.local, joiner.key_material());
     assert_eq!(at_joiner.remote, Some(responder.key_material()));
-    let method = PairingMethod::builder(joiner).build();
+    let method = PairingMethod::builder(joiner).build().unwrap();
     // Admitting any proved key is what a pairing method is, so it is not a non-default setting.
     assert!(method.non_defaults().is_empty());
     // `PairingSession` has no `seal` or `open`, and `Trust` has no way to admit a stranger: the
@@ -325,15 +325,19 @@ fn an_invitation_goes_only_to_the_key_the_handshake_proved_to_be_the_inviters() 
     // A pin on the inviter stops such a relay at the handshake, before pairing is reached.
     let pinned = PairingMethod::builder(joiner.clone())
         .responders(Trust::pinned([inviter.peer_id()]))
-        .build();
+        .build()
+        .unwrap();
     assert!(matches!(
-        pairing_run(&pinned, &PairingMethod::builder(relay).build()),
+        pairing_run(&pinned, &PairingMethod::builder(relay).build().unwrap()),
         Err(Error::Untrusted)
     ));
 
     // With the real inviter it pairs.
-    let (near, far) =
-        pairing_run(&pinned, &PairingMethod::builder(inviter.clone()).build()).unwrap();
+    let (near, far) = pairing_run(
+        &pinned,
+        &PairingMethod::builder(inviter.clone()).build().unwrap(),
+    )
+    .unwrap();
     assert!(near.session.pair_channel().unwrap().verified);
     assert!(!far.session.pair_channel().unwrap().verified);
     let (mut a, mut b) = pipes();
@@ -370,9 +374,13 @@ fn the_device_flow_needs_a_verified_responder_and_runs_through_the_driver() {
 
     let pinned = PairingMethod::builder(joiner.clone())
         .responders(Trust::pinned([responder.peer_id()]))
-        .build();
-    let (near, far) =
-        pairing_run(&pinned, &PairingMethod::builder(responder.clone()).build()).unwrap();
+        .build()
+        .unwrap();
+    let (near, far) = pairing_run(
+        &pinned,
+        &PairingMethod::builder(responder.clone()).build().unwrap(),
+    )
+    .unwrap();
     let (mut a, mut b) = pipes();
     let serving = {
         let (store, desk) = (world.store.clone(), world.desk.clone());
@@ -554,6 +562,7 @@ impl Unruly {
         let mut near = Self::builder(&prologue).build_initiator().unwrap();
         let mut far = PairingMethod::builder(responder.clone())
             .build()
+            .unwrap()
             .respond(None)
             .unwrap();
         let (mut buffer, mut scratch) = ([0u8; 256], [0u8; 256]);
@@ -575,6 +584,7 @@ impl Unruly {
         let mut far = Self::builder(&prologue).build_responder().unwrap();
         let mut near = PairingMethod::builder(joiner.clone())
             .build()
+            .unwrap()
             .initiate()
             .unwrap();
         let (mut buffer, mut scratch) = ([0u8; 256], [0u8; 256]);
@@ -649,6 +659,7 @@ fn a_run_of_one_purpose_fails_at_the_second_message_against_the_other() {
         .unwrap();
     let mut listening = PairingMethod::builder(responder.clone())
         .build()
+        .unwrap()
         .respond(None)
         .unwrap();
     assert!(matches!(
@@ -658,6 +669,7 @@ fn a_run_of_one_purpose_fails_at_the_second_message_against_the_other() {
     // A joiner sent to the ordinary endpoint of a bridge that already trusts it.
     let mut dialing = PairingMethod::builder(joiner.clone())
         .build()
+        .unwrap()
         .initiate()
         .unwrap();
     let mut listening = Noise::builder(responder)
@@ -810,7 +822,7 @@ fn over_sockets(
     let relay = relayed(relay_near, relay_far, tamper);
     let serving = {
         let (store, desk) = (world.store.clone(), world.desk.clone());
-        let method = PairingMethod::builder(responder.clone()).build();
+        let method = PairingMethod::builder(responder.clone()).build().unwrap();
         thread::spawn(move || {
             let mut framed = FramedStream::new(responder_end, MAX_HANDSHAKE_MESSAGE);
             let established = drive_messages(method.respond(None).unwrap(), &mut framed)
@@ -823,7 +835,7 @@ fn over_sockets(
         })
     };
     let mut framed = FramedStream::new(joiner_end, MAX_HANDSHAKE_MESSAGE);
-    let method = PairingMethod::builder(joiner.clone()).build();
+    let method = PairingMethod::builder(joiner.clone()).build().unwrap();
     let joined = drive_messages(method.initiate().unwrap(), &mut framed)
         .map_err(|_| Error::BadProof)
         .and_then(|established| {
@@ -914,8 +926,10 @@ fn a_framed_stream_at_the_stated_limit_carries_the_longest_exchange() {
     let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
     let pinned = PairingMethod::builder(joiner.clone())
         .responders(Trust::pinned([responder.peer_id()]))
-        .build();
-    let (near, far) = pairing_run(&pinned, &PairingMethod::builder(responder).build()).unwrap();
+        .build()
+        .unwrap();
+    let (near, far) =
+        pairing_run(&pinned, &PairingMethod::builder(responder).build().unwrap()).unwrap();
     let (a, b) = connected();
     let serving = {
         let (store, desk) = (world.store.clone(), world.desk.clone());
@@ -1167,7 +1181,7 @@ impl MessageTransport for Armed {
 
 fn first_armed(method: PairingMethod, own: Option<Duration>) -> Option<Duration> {
     let (joiner, world) = (Identity::generate().unwrap(), world());
-    let near = PairingMethod::builder(joiner).build();
+    let near = PairingMethod::builder(joiner).build().unwrap();
     let (mut a, mut b) = (near.initiate().unwrap(), method.respond(None).unwrap());
     while !(a.is_complete() && b.is_complete()) {
         while let Some(message) = a.transmit().unwrap() {
@@ -1194,7 +1208,11 @@ fn about(found: Option<Duration>, wanted: Duration) -> bool {
 
 #[test]
 fn before_the_first_message_a_responder_waits_for_the_smaller_of_its_setting_and_the_transports() {
-    let method = || PairingMethod::builder(Identity::generate().unwrap()).build();
+    let method = || {
+        PairingMethod::builder(Identity::generate().unwrap())
+            .build()
+            .unwrap()
+    };
     let found = first_armed(method(), None);
     assert!(about(found, DEFAULT_FIRST_MESSAGE_TIMEOUT), "{found:?}");
     let shorter = Duration::from_secs(20);
@@ -1205,45 +1223,33 @@ fn before_the_first_message_a_responder_waits_for_the_smaller_of_its_setting_and
         about(found, DEFAULT_FIRST_MESSAGE_TIMEOUT),
         "ours, shorter: {found:?}"
     );
-    let set = timed(shorter);
+    let set = timed(Some(shorter));
     let found = first_armed(set, None);
     assert!(about(found, shorter), "the setting: {found:?}");
     // With no bound asked for, the transport is left alone.
-    let unset = timed(Duration::MAX);
+    let unset = timed(None);
     assert_eq!(first_armed(unset, None), None);
-    let unset = timed(Duration::MAX);
+    let unset = timed(None);
     let found = first_armed(unset, Some(shorter));
     assert!(about(found, shorter), "the caller's alone: {found:?}");
 }
 
 #[test]
-fn a_first_message_timeout_of_zero_refuses_with_nothing_read_and_the_joiner_is_told() {
-    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let world = world();
-    let (near, far) = pairing_run(
-        &PairingMethod::builder(joiner.clone()).build(),
-        &PairingMethod::builder(responder)
+fn a_first_message_timeout_of_zero_is_refused_when_the_method_is_built() {
+    assert!(matches!(
+        PairingMethod::builder(Identity::generate().unwrap())
             .first_message_timeout(Duration::ZERO)
             .build(),
-    )
-    .unwrap();
-    let mut armed = Armed::default();
-    let served = far
-        .session
-        .respond(&world.store, &world.desk, None, &mut armed)
-        .map(drop);
-    assert!(is_refusal(&served, PairRefusal::Expired), "{served:?}");
-    assert_eq!(armed.reads, 0, "nothing read");
-    assert!(armed.armed.lock().unwrap().is_empty(), "no timeout armed");
-    assert_eq!(armed.sent.len(), 1);
-    let (mut a, mut b) = pipes();
-    b.send(&armed.sent[0]).unwrap();
-    let joined = near
-        .session
-        .join(typed("123456"), &mut a)
-        .and_then(coqui_peer_noise::PairDial::finish)
-        .map(drop);
-    assert!(is_refusal(&joined, PairRefusal::Expired), "{joined:?}");
+        Err(Error::Settings)
+    ));
+    let mut settings = PairingSettings::default();
+    settings.first_message_timeout = Some(Duration::ZERO);
+    assert!(matches!(
+        PairingMethod::builder(Identity::generate().unwrap())
+            .settings(settings)
+            .build(),
+        Err(Error::Settings)
+    ));
 }
 
 #[test]
@@ -1306,19 +1312,20 @@ fn a_first_message_timeout_that_differs_from_the_default_is_reported() {
             .iter()
             .any(|non_default| non_default.setting == "first_message_timeout")
     };
-    assert!(!listed(&timed(DEFAULT_FIRST_MESSAGE_TIMEOUT)));
-    assert!(listed(&timed(Duration::ZERO)));
-    assert!(listed(&timed(
+    assert!(!listed(&timed(Some(DEFAULT_FIRST_MESSAGE_TIMEOUT))));
+    assert!(listed(&timed(Some(Duration::from_secs(1)))));
+    assert!(listed(&timed(Some(
         DEFAULT_FIRST_MESSAGE_TIMEOUT + Duration::from_secs(1)
-    )));
-    assert!(listed(&timed(Duration::MAX)));
+    ))));
+    assert!(listed(&timed(None)));
 }
 
 /// A pairing method whose responder waits `timeout` for the first message.
-fn timed(timeout: Duration) -> PairingMethod {
+fn timed(timeout: Option<Duration>) -> PairingMethod {
     PairingMethod::builder(Identity::generate().unwrap())
         .first_message_timeout(timeout)
         .build()
+        .unwrap()
 }
 
 /// A transport whose reads, after `pass` real ones, answer `TimedOut` at once, as a channel does

@@ -278,8 +278,8 @@ fn an_outer_binding_is_optional_and_refuses_two_different_channels() {
     let (_, _, dialing, listening) = pinned_pair();
     let bind = |binding: &[u8]| {
         (
-            dialing.initiate().unwrap().binding(binding).unwrap(),
-            listening.respond(None).unwrap().binding(binding).unwrap(),
+            dialing.initiate().unwrap().bind(binding).unwrap(),
+            listening.respond(None).unwrap().bind(binding).unwrap(),
         )
     };
     let (mut a, mut b) = bind(b"the same channel");
@@ -287,16 +287,16 @@ fn an_outer_binding_is_optional_and_refuses_two_different_channels() {
     let bound_id = *a.finish().unwrap().session.id();
 
     // A relay ending TLS on both sides gives each end another value.
-    let mut a = dialing.initiate().unwrap().binding(b"client side").unwrap();
+    let mut a = dialing.initiate().unwrap().bind(b"client side").unwrap();
     let mut b = listening
         .respond(None)
         .unwrap()
-        .binding(b"server side")
+        .bind(b"server side")
         .unwrap();
     assert!(matches!(exchange(&mut a, &mut b), Err(Error::BadProof)));
 
     // One end with a binding, one without: a proxy that ends TLS for one side only.
-    let mut a = dialing.initiate().unwrap().binding(b"client side").unwrap();
+    let mut a = dialing.initiate().unwrap().bind(b"client side").unwrap();
     let mut b = listening.respond(None).unwrap();
     assert!(matches!(exchange(&mut a, &mut b), Err(Error::BadProof)));
 
@@ -310,10 +310,10 @@ fn a_binding_set_after_the_prologue_is_fixed_is_refused() {
     let (_, _, dialing, listening) = pinned_pair();
     let mut a = dialing.initiate().unwrap();
     let first = a.transmit().unwrap().unwrap();
-    assert!(matches!(a.binding(b"late"), Err(Error::State)));
+    assert!(matches!(a.bind(b"late"), Err(Error::State)));
     let mut b = listening.respond(None).unwrap();
     b.receive(&first).unwrap();
-    assert!(matches!(b.binding(b"late"), Err(Error::State)));
+    assert!(matches!(b.bind(b"late"), Err(Error::State)));
 }
 
 #[test]
