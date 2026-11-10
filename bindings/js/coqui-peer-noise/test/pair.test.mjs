@@ -644,10 +644,10 @@ test('nonDefaults() names each setting that differs from its default by its Rust
   assert.deepEqual(names(await createInitiator(a, b.peerId, {rekey: false})), ['rekey']);
   assert.deepEqual(names(await createInitiator(a, b.peerId, {ephemeral: replaced})), ['ephemeral']);
   assert.deepEqual(names(await createResponder(b, {allowClient: async () => true, rekey: false})), ['rekey']);
-  assert.deepEqual((await createInitiator(a, b.peerId, {rekey: false})).nonDefaults(), [{setting: 'rekey', value: 'false', default: 'true'}]);
+  assert.deepEqual((await createInitiator(a, b.peerId, {rekey: false})).nonDefaults(), [{setting: 'rekey', value: 'bool(false)', default: 'bool(true)'}]);
   assert.deepEqual(
     (await createInitiator(a, b.peerId, {keyLimit: 16})).nonDefaults(),
-    [{setting: 'key_limit', value: '16', default: String(DEFAULT_KEY_LIMIT)}],
+    [{setting: 'key_limit', value: 'u64(16)', default: `u64(${DEFAULT_KEY_LIMIT})`}],
   );
 
   // Admitting any proved key is what pairing is: it is not listed.
@@ -663,14 +663,14 @@ test('nonDefaults() names each setting that differs from its default by its Rust
   );
   assert.deepEqual(
     (await createPairingResponder(b, {firstMessageTimeout: 1500})).nonDefaults(),
-    [{setting: 'first_message_timeout', value: '[1,500000000]', default: '[60,0]'}],
+    [{setting: 'first_message_timeout', value: 'Duration(1500ms)', default: 'Duration(60s)'}],
   );
 
   // The desk, by what a guess's chance and a PIN's life come to.
   assert.deepEqual(names(createPairingDesk()), []);
   assert.deepEqual(names(createPairingDesk({pinLength: 7, pinTtl: 1})), []);
   assert.deepEqual(names(createPairingDesk({pinLength: 1})), ['pinCombinations']);
-  assert.deepEqual(createPairingDesk({pinLength: 1}).nonDefaults(), [{setting: 'pinCombinations', value: '10', default: '1000000'}]);
+  assert.deepEqual(createPairingDesk({pinLength: 1}).nonDefaults(), [{setting: 'pinCombinations', value: 'usize(10)', default: 'usize(1000000)'}]);
   assert.deepEqual(names(createPairingDesk({pinAlphabet: '01'})), ['pinCombinations']);
   assert.deepEqual(names(createPairingDesk({pinAlphabet: '01', pinLength: 20})), []);
   assert.deepEqual(names(createPairingDesk({pinAttempts: 2})), ['pinAttempts']);
@@ -678,6 +678,29 @@ test('nonDefaults() names each setting that differs from its default by its Rust
   assert.deepEqual(names(createPairingDesk({random: () => new Uint8Array(4)})), ['random']);
   assert.deepEqual(names(createPairingDesk({now: () => 0})), ['now']);
 });
+
+test('nonDefaults() writes Rust\'s Type(text) form, with durations as Rust writes them', async () => {
+  const b = await generateIdentity();
+  const timeout = async firstMessageTimeout =>
+    (await createPairingResponder(b, {firstMessageTimeout})).nonDefaults()[0].value;
+  assert.equal(await timeout(30_000), 'Duration(30s)');
+  assert.equal(await timeout(250), 'Duration(250ms)');
+  assert.equal(await timeout(1.5), 'Duration(1500us)');
+  assert.equal(await timeout(0.0007), 'Duration(700ns)');
+  assert.equal(await timeout(0), 'Duration(0s)');
+  assert.equal(await timeout(120_000), 'Duration(120s)');
+  assert.equal(await timeout(Infinity), 'Duration(never)');
+  assert.deepEqual(createPairingDesk({pinTtl: 700_000}).nonDefaults(), [
+    {setting: 'pinTtl', value: 'Duration(700s)', default: 'Duration(600s)'},
+  ]);
+  assert.deepEqual(createPairingDesk({pinAttempts: 3}).nonDefaults(), [
+    {setting: 'pinAttempts', value: 'u32(3)', default: 'u32(1)'},
+  ]);
+  assert.deepEqual(createPairingDesk({random: () => new Uint8Array(4)}).nonDefaults(), [
+    {setting: 'random', value: "Random(caller's)", default: "Random(the engine's)"},
+  ]);
+});
+
 
 /** The responder's answer to a first message, with a desk that has a PIN unless told otherwise. */
 async function helloRefused(message, {show = true} = {}) {

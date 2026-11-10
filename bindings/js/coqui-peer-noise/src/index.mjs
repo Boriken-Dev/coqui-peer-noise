@@ -577,22 +577,34 @@ function options({keyLimit = DEFAULT_KEY_LIMIT, rekey = true, binding = new Uint
   };
 }
 
-/** One setting that differs from its default, as Rust's `NonDefault`: reported, never refused. */
+/**
+ * One setting that differs from its default, as Rust's `NonDefault`: reported, never refused. `value` and
+ * `standard` are `[type, text]`, shown as Rust shows them: `Type(text)`.
+ */
 function nonDefault(setting, value, standard) {
-  return Object.freeze({setting, value: String(value), default: String(standard)});
+  const shown = ([type, text]) => `${type}(${text})`;
+  return Object.freeze({setting, value: shown(value), default: shown(standard)});
 }
 
-/** A span of milliseconds as the text Rust gives a `Duration`: `[secs,nanos]`. */
+/**
+ * A span of milliseconds as the text Rust gives a `Duration`: whole seconds (`30s`), else exactly
+ * milliseconds (`250ms`), microseconds (`1500us`) or nanoseconds (`7ns`); a span that never ends is `never`.
+ */
 function durationText(milliseconds) {
-  const secs = Math.floor(milliseconds / 1000);
-  return `[${secs},${Math.round((milliseconds - secs * 1000) * 1e6)}]`;
+  if (milliseconds === Infinity) return 'never';
+  const whole = Number.isInteger(milliseconds);
+  const nanos = whole ? BigInt(milliseconds) * 1_000_000n : BigInt(Math.round(milliseconds * 1e6));
+  for (const [unit, size] of [['s', 1_000_000_000n], ['ms', 1_000_000n], ['us', 1_000n]]) {
+    if (nanos % size === 0n) return `${nanos / size}${unit}`;
+  }
+  return `${nanos}ns`;
 }
 
 function nonDefaultSettings(settings) {
   const found = [];
-  if (settings.keyLimit !== DEFAULT_KEY_LIMIT) found.push(nonDefault('key_limit', settings.keyLimit, DEFAULT_KEY_LIMIT));
-  if (!settings.rekey) found.push(nonDefault('rekey', false, true));
-  if (settings.ephemeralReplaced) found.push(nonDefault('ephemeral', "caller's", "the engine's"));
+  if (settings.keyLimit !== DEFAULT_KEY_LIMIT) found.push(nonDefault('key_limit', ['u64', settings.keyLimit], ['u64', DEFAULT_KEY_LIMIT]));
+  if (!settings.rekey) found.push(nonDefault('rekey', ['bool', false], ['bool', true]));
+  if (settings.ephemeralReplaced) found.push(nonDefault('ephemeral', ['Ephemeral', "caller's"], ['Ephemeral', "the engine's"]));
   return found;
 }
 
@@ -1106,12 +1118,12 @@ export function createPairingDesk({
       const found = [];
       const combinations = alphabet.length ** pinLength;
       if (combinations < DESK_DEFAULTS.combinations) {
-        found.push(nonDefault('pinCombinations', combinations, DESK_DEFAULTS.combinations));
+        found.push(nonDefault('pinCombinations', ['usize', combinations], ['usize', DESK_DEFAULTS.combinations]));
       }
-      if (pinAttempts > DESK_DEFAULTS.pinAttempts) found.push(nonDefault('pinAttempts', pinAttempts, DESK_DEFAULTS.pinAttempts));
-      if (pinTtl > DESK_DEFAULTS.pinTtl) found.push(nonDefault('pinTtl', pinTtl, DESK_DEFAULTS.pinTtl));
-      if (random !== OS_RANDOM) found.push(nonDefault('random', "caller's", "the engine's"));
-      if (now !== Date.now) found.push(nonDefault('now', "caller's", 'Date.now'));
+      if (pinAttempts > DESK_DEFAULTS.pinAttempts) found.push(nonDefault('pinAttempts', ['u32', pinAttempts], ['u32', DESK_DEFAULTS.pinAttempts]));
+      if (pinTtl > DESK_DEFAULTS.pinTtl) found.push(nonDefault('pinTtl', ['Duration', durationText(pinTtl)], ['Duration', durationText(DESK_DEFAULTS.pinTtl)]));
+      if (random !== OS_RANDOM) found.push(nonDefault('random', ['Random', "caller's"], ['Random', "the engine's"]));
+      if (now !== Date.now) found.push(nonDefault('now', ['Clock', "caller's"], ['Clock', 'Date.now']));
       return found;
     },
     /** Shows a new PIN, replacing any before it, with its attempts. */
@@ -1323,7 +1335,7 @@ export async function createPairingInitiator(identity, {responder, random = OS_R
   const local = await checkIdentity(identity);
   if (responder !== undefined && !PEER_ID.test(responder)) throw new Error('A pinned responder id is required');
   const looser = [];
-  if (random !== OS_RANDOM) looser.push(nonDefault('random', "caller's", "the engine's"));
+  if (random !== OS_RANDOM) looser.push(nonDefault('random', ['Random', "caller's"], ['Random', "the engine's"]));
   return dialling(local, PURPOSE_PAIR, settings, looser, async id => {
     if (responder !== undefined && id !== responder) throw new Error('Responder is not pinned');
   }, async (session, remote) => ({
@@ -1346,7 +1358,7 @@ export async function createPairingResponder(identity, {firstMessageTimeout = DE
   const local = await checkIdentity(identity);
   const looser = [];
   if (firstMessageTimeout !== DEFAULT_FIRST_MESSAGE_TIMEOUT) {
-    looser.push(nonDefault('first_message_timeout', durationText(firstMessageTimeout), durationText(DEFAULT_FIRST_MESSAGE_TIMEOUT)));
+    looser.push(nonDefault('first_message_timeout', ['Duration', durationText(firstMessageTimeout)], ['Duration', durationText(DEFAULT_FIRST_MESSAGE_TIMEOUT)]));
   }
   return accepting(local, PURPOSE_PAIR, settings, looser, async () => {}, async (session, remote) => ({
     pairing: pairingSessionOf(session, local, remote, false, OS_RANDOM, firstMessageTimeout),
