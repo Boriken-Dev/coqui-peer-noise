@@ -4,22 +4,23 @@ use core::time::Duration;
 use std::io;
 use std::time::Instant;
 
+use coqui_builder::NonDefault;
 use coqui_peer::pair::{
     Channel, PairRefusal, Paired, Pairing, PairingDesk, PairingError, PairingJoiner,
     PairingResponder, Shown,
 };
 use coqui_peer::{
-    Established, Framing, Handshake, KeyMaterial, MessageTransport, Method, NonDefault, PeerId,
-    Random, TrustStore,
+    Established, Framing, Handshake, KeyMaterial, MessageTransport, Method, PeerId, Random,
+    TrustStore,
 };
 
 use crate::error::Error;
 use crate::framed::CurrentReadTimeout;
-use crate::handshake::{METHOD, Noise, NoiseBuilder, NoiseHandshake};
+use crate::handshake::{METHOD, Noise, NoiseHandshake, PURPOSE_PAIR, random_entry};
 use crate::identity::Identity;
 use crate::session::Session;
 use crate::settings::PairingSettings;
-use crate::trust::Trust;
+use crate::trust::{Admit, Trust};
 
 /// The export label [`PairingSession::pair_channel`] binds a pairing to.
 pub const PAIR_EXPORT_LABEL: &str = "EXPORTER-coqui-pair";
@@ -33,11 +34,6 @@ pub const MAX_PAIRING_RECORD: usize = 350;
 /// How long a responder waits for a joiner's first message, unless told otherwise: a stranger who
 /// proved a key and says nothing holds a connection for this long, with no desk limit applying yet.
 pub const DEFAULT_FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// A duration as the text a settings value gives it, `[secs,nanos]`.
-fn duration_text(duration: Duration) -> String {
-    format!("[{},{}]", duration.as_secs(), duration.subsec_nanos())
-}
 
 /// `PROTOCOL.md`'s refused message: version, kind, why (expired). A [`PairingResponder`] has a
 /// deadline to refuse by only from the joiner's first message.
@@ -59,85 +55,56 @@ pub struct PairingMethod {
     first_message_timeout: Option<Duration>,
 }
 
-/// Builds a [`PairingMethod`]: [`PairingMethod::builder`], the settings, then
-/// [`build`](Self::build).
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct PairingMethodBuilder {
-    noise: NoiseBuilder,
-    first_message_timeout: Option<Duration>,
+/// What a [`PairingMethodBuilder`] collects: the settings and the inputs.
+///
+/// The identity is required. The random source is the operating system's unless given. Build the
+/// method with [`PairingMethod::builder`]; `build` gives [`Error::Settings`] when the
+/// first-message timeout is `Some(Duration::ZERO)`.
+#[derive(coqui_builder::Builder, Debug)]
+#[builder(build = PairingMethod, fallible)]
+pub struct PairingMethodParts {
+    settings: PairingSettings,
+    /// The identity this method proves.
+    #[builder(input)]
+    identity: Identity,
+    /// Whom a joiner accepts: a pin or a store. The session is then verified, which the device
+    /// flow asks for; the key an invitation names must be the proved one in any case.
+    #[builder(input)]
+    responders: Option<Trust>,
+    /// Where ephemeral keys come from, as [`NoiseParts`](crate::NoiseParts)'s `random`. The PAKE's
+    /// own random source is the [`Pairing`]'s and the [`PairingDesk`]'s.
+    #[builder(input)]
+    random: Option<Random>,
 }
 
-impl PairingMethodBuilder {
-    /// Whom a joiner accepts: a pin or a store. The session is then verified, which the device flow
-    /// asks for; the key an invitation names must be the proved one in any case.
-    pub fn responders(mut self, trust: Trust) -> Self {
-        self.noise = self.noise.responders(trust);
-        self
-    }
+impl TryFrom<PairingMethodParts> for PairingMethod {
+    type Error = Error;
 
-    /// How long [`PairingSession::respond`] waits for the joiner's first message; see
-    /// [`PairingSettings::first_message_timeout`]. `None` leaves the transport's own bound as the
-    /// only one; `Some(Duration::ZERO)` is refused by [`build`](Self::build).
-    /// [`DEFAULT_FIRST_MESSAGE_TIMEOUT`] by default.
-    pub fn first_message_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
-        self.first_message_timeout = timeout.into();
-        self
-    }
-
-    /// As [`NoiseBuilder::key_limit`].
-    pub fn key_limit(mut self, bytes: u64) -> Self {
-        self.noise = self.noise.key_limit(bytes);
-        self
-    }
-
-    /// As [`NoiseBuilder::rekey`].
-    pub fn rekey(mut self, rekey: bool) -> Self {
-        self.noise = self.noise.rekey(rekey);
-        self
-    }
-
-    /// As [`NoiseBuilder::random`]. The PAKE's own random source is the [`Pairing`]'s and the
-    /// [`PairingDesk`]'s.
-    pub fn random(mut self, random: Random) -> Self {
-        self.noise = self.noise.random(random);
-        self
-    }
-
-    /// The key limit, rekeying and first-message timeout from `settings`. Replaces what those
-    /// setters set before, and is replaced by what they set after it.
-    pub fn settings(mut self, settings: PairingSettings) -> Self {
-        self.noise = self.noise.settings(settings.noise());
-        self.first_message_timeout = settings.first_message_timeout;
-        self
-    }
-
-    /// The method.
+    /// The method, as a responder admitting any proved key, and as a joiner accepting any proved
+    /// key unless `responders` is given.
     ///
     /// # Errors
     ///
     /// [`Error::Settings`] when the first-message timeout is `Some(Duration::ZERO)`.
-    pub fn build(self) -> Result<PairingMethod, Error> {
-        if self.first_message_timeout == Some(Duration::ZERO) {
+    fn try_from(parts: PairingMethodParts) -> Result<Self, Error> {
+        if parts.settings.first_message_timeout == Some(Duration::ZERO) {
             return Err(Error::Settings);
         }
         Ok(PairingMethod {
-            noise: self.noise.build(),
-            first_message_timeout: self.first_message_timeout,
+            noise: Noise::configured(
+                parts.identity,
+                PURPOSE_PAIR,
+                parts.settings.noise(),
+                Some(parts.responders.map_or(Admit::Any, Admit::Trust)),
+                Some(Admit::Any),
+                parts.random,
+            ),
+            first_message_timeout: parts.settings.first_message_timeout,
         })
     }
 }
 
 impl PairingMethod {
-    /// A builder for a method for `identity`, as a responder admitting any proved key, and as a
-    /// joiner accepting any proved key until [`responders`](PairingMethodBuilder::responders).
-    pub fn builder(identity: Identity) -> PairingMethodBuilder {
-        PairingMethodBuilder {
-            noise: NoiseBuilder::admitting_anyone(identity),
-            first_message_timeout: Some(DEFAULT_FIRST_MESSAGE_TIMEOUT),
-        }
-    }
-
     /// This method's identity.
     #[must_use]
     pub fn identity(&self) -> &Identity {
@@ -160,17 +127,9 @@ impl PairingMethod {
     /// by definition, so that is not listed.
     #[must_use]
     pub fn non_defaults(&self) -> Vec<NonDefault> {
-        let mut non_defaults = NonDefault::of_settings(&self.settings().noise());
-        if self.first_message_timeout != Some(DEFAULT_FIRST_MESSAGE_TIMEOUT) {
-            non_defaults.push(NonDefault::new(
-                "first_message_timeout",
-                self.first_message_timeout
-                    .map_or_else(|| "never".into(), duration_text),
-                duration_text(DEFAULT_FIRST_MESSAGE_TIMEOUT),
-            ));
-        }
+        let mut non_defaults = coqui_builder::non_defaults(&self.settings());
         if self.noise.random_replaced() {
-            non_defaults.push(NonDefault::new("random", "caller's", "operating system's"));
+            non_defaults.push(random_entry());
         }
         non_defaults
     }

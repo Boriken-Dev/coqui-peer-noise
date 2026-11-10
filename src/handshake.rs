@@ -3,7 +3,8 @@ use alloc::sync::Arc;
 use core::fmt;
 use core::net::SocketAddr;
 
-use coqui_peer::{Established, Framing, Handshake, KeyMaterial, Method, NonDefault, Random};
+use coqui_builder::{Datum, NonDefault, Shown};
+use coqui_peer::{Established, Framing, Handshake, KeyMaterial, Method, Random};
 use x25519_dalek::StaticSecret;
 use zeroize::Zeroizing;
 
@@ -24,11 +25,20 @@ pub const PROFILE: &str = "dev.boriken.coqui.peer-noise/v1";
 /// What a run is for, second in the Noise prologue, so a run for one fails against the other at its
 /// second message and a relay cannot pick which a peer gets.
 const PURPOSE_ORDINARY: &[u8] = b"ordinary";
-const PURPOSE_PAIR: &[u8] = b"pair";
+pub(crate) const PURPOSE_PAIR: &[u8] = b"pair";
 
 const FIRST_LEN: usize = DHLEN;
 const SECOND_LEN: usize = DHLEN + (DHLEN + TAGLEN) + TAGLEN;
 const THIRD_LEN: usize = (DHLEN + TAGLEN) + TAGLEN;
+
+/// The non-setting entry that says the ephemeral keys come from the caller's random source.
+pub(crate) fn random_entry() -> NonDefault {
+    NonDefault::new(
+        "random",
+        Shown::One(Datum::new("Random", "caller's")),
+        Shown::One(Datum::new("Random", "operating system's")),
+    )
+}
 
 /// The operating system's generator as a [`Random`].
 #[must_use]
@@ -62,8 +72,16 @@ struct Config {
 ///
 /// # fn main() -> Result<(), coqui_peer_noise::Error> {
 /// let (dialer, listener) = (Identity::generate()?, Identity::generate()?);
-/// let client = Noise::builder(dialer.clone()).responders(Trust::pinned([listener.peer_id()])).build();
-/// let server = Noise::builder(listener).initiators(Trust::pinned([dialer.peer_id()])).build();
+/// let client = Noise::builder()
+///     .identity(dialer.clone())
+///     .responders(Trust::pinned([listener.peer_id()]))
+///     .build()
+///     .unwrap();
+/// let server = Noise::builder()
+///     .identity(listener)
+///     .initiators(Trust::pinned([dialer.peer_id()]))
+///     .build()
+///     .unwrap();
 ///
 /// let (mut dialing, mut listening) = (client.initiate()?, server.respond(None)?);
 /// while !(dialing.is_complete() && listening.is_complete()) {
@@ -87,81 +105,65 @@ struct Config {
 #[derive(Clone)]
 pub struct Noise(Arc<Config>);
 
-/// Builds a [`Noise`]: [`Noise::builder`], the settings, then [`build`](Self::build).
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct NoiseBuilder(Config);
-
-impl NoiseBuilder {
-    /// The method a [`PairingMethod`](crate::PairingMethod) runs: any proved key, in both roles.
-    pub(crate) fn admitting_anyone(identity: Identity) -> Self {
-        let mut builder = Noise::builder(identity);
-        builder.0.purpose = PURPOSE_PAIR;
-        builder.0.responders = Some(Admit::Any);
-        builder.0.initiators = Some(Admit::Any);
-        builder
-    }
-
+/// What a [`NoiseBuilder`] collects: the settings and the inputs.
+///
+/// The identity is required. A role is configured by giving its trust, and the random source is
+/// the operating system's unless given. Build the method with [`Noise::builder`].
+#[derive(coqui_builder::Builder, Debug)]
+#[builder(build = Noise)]
+pub struct NoiseParts {
+    settings: NoiseSettings,
+    /// The identity this method proves.
+    #[builder(input)]
+    identity: Identity,
     /// Whom [`initiate`](Method::initiate) admits as the responder.
-    pub fn responders(mut self, trust: Trust) -> Self {
-        self.0.responders = Some(Admit::Trust(trust));
-        self
-    }
-
+    #[builder(input)]
+    responders: Option<Trust>,
     /// Whom [`respond`](Method::respond) admits as the initiator.
-    pub fn initiators(mut self, trust: Trust) -> Self {
-        self.0.initiators = Some(Admit::Trust(trust));
-        self
-    }
+    #[builder(input)]
+    initiators: Option<Trust>,
+    /// Where ephemeral keys come from; the operating system by default. It must be
+    /// cryptographically secure: section 14 of the Noise specification calls a reused ephemeral
+    /// key catastrophic. A fixed source is for test vectors. It is reported by
+    /// [`Noise::non_defaults`].
+    #[builder(input)]
+    random: Option<Random>,
+}
 
-    /// What one key may carry in one direction; see [`NoiseSettings::key_limit`].
-    pub fn key_limit(mut self, bytes: u64) -> Self {
-        self.0.settings.key_limit = bytes;
-        self
-    }
-
-    /// Whether this side changes its sending key by itself at the key limit; see
-    /// [`NoiseSettings::rekey`].
-    pub fn rekey(mut self, rekey: bool) -> Self {
-        self.0.settings.rekey = rekey;
-        self
-    }
-
-    /// Where ephemeral keys come from; the operating system by default. It must be cryptographically
-    /// secure: section 14 of the Noise specification calls a reused ephemeral key catastrophic. A
-    /// fixed source is for test vectors. It is reported by [`Noise::non_defaults`].
-    pub fn random(mut self, random: Random) -> Self {
-        self.0.random = random;
-        self.0.random_replaced = true;
-        self
-    }
-
-    /// The key limit and rekeying from `settings`. Replaces what [`key_limit`](Self::key_limit)
-    /// and [`rekey`](Self::rekey) set before, and is replaced by what they set after it.
-    pub fn settings(mut self, settings: NoiseSettings) -> Self {
-        self.0.settings = settings;
-        self
-    }
-
-    /// The method.
-    pub fn build(self) -> Noise {
-        Noise(Arc::new(self.0))
+impl From<NoiseParts> for Noise {
+    fn from(parts: NoiseParts) -> Self {
+        Noise::configured(
+            parts.identity,
+            PURPOSE_ORDINARY,
+            parts.settings,
+            parts.responders.map(Admit::Trust),
+            parts.initiators.map(Admit::Trust),
+            parts.random,
+        )
     }
 }
 
 impl Noise {
-    /// A builder for a method for `identity`, configured for neither role until
-    /// [`responders`](NoiseBuilder::responders) or [`initiators`](NoiseBuilder::initiators).
-    pub fn builder(identity: Identity) -> NoiseBuilder {
-        NoiseBuilder(Config {
+    /// A method for `identity` under `purpose`; a random source that is given is reported by
+    /// [`non_defaults`](Self::non_defaults).
+    pub(crate) fn configured(
+        identity: Identity,
+        purpose: &'static [u8],
+        settings: NoiseSettings,
+        responders: Option<Admit>,
+        initiators: Option<Admit>,
+        random: Option<Random>,
+    ) -> Noise {
+        let random_replaced = random.is_some();
+        Noise(Arc::new(Config {
             identity,
-            purpose: PURPOSE_ORDINARY,
-            responders: None,
-            initiators: None,
-            settings: NoiseSettings::default(),
-            random: crate::random(),
-            random_replaced: false,
-        })
+            purpose,
+            responders,
+            initiators,
+            settings,
+            random: random.unwrap_or_else(crate::random),
+            random_replaced,
+        }))
     }
 
     /// Whether an initiator's peer is admitted by a pin or a store, and not as any proved key.
@@ -185,9 +187,9 @@ impl Noise {
     /// ephemeral keys do not come from the operating system.
     #[must_use]
     pub fn non_defaults(&self) -> Vec<NonDefault> {
-        let mut non_defaults = NonDefault::of_settings(&self.0.settings);
+        let mut non_defaults = coqui_builder::non_defaults(&self.0.settings);
         if self.0.random_replaced {
-            non_defaults.push(NonDefault::new("random", "caller's", "operating system's"));
+            non_defaults.push(random_entry());
         }
         non_defaults
     }

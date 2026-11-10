@@ -112,7 +112,10 @@ fn drive_error(error: coqui_peer::DriveError<Error>) -> Error {
 fn respond(identity: Identity, directory: &Path) -> Result<u8, Failure> {
     let store = TrustStore::open(directory)?;
     let desk = PairingDesk::new(random());
-    let method = PairingMethod::builder(identity.clone()).build().unwrap();
+    let method = PairingMethod::builder()
+        .identity(identity.clone())
+        .build()
+        .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0")?;
     say(&listener.local_addr()?.port().to_string())?;
     say(&format!(
@@ -137,9 +140,11 @@ fn respond(identity: Identity, directory: &Path) -> Result<u8, Failure> {
     };
     say(&format!("{{\"paired\":\"{joiner}\"}}"))?;
     let (socket, source) = listener.accept()?;
-    let ordinary = Noise::builder(identity)
+    let ordinary = Noise::builder()
+        .identity(identity)
         .initiators(Trust::Store(store))
-        .build();
+        .build()
+        .unwrap();
     let mut framed = FramedStream::new(socket, MAX_HANDSHAKE_MESSAGE);
     let established = match drive_messages(ordinary.respond(Some(source))?, &mut framed) {
         Ok(established) => established,
@@ -174,7 +179,10 @@ fn join(
     lines: &mut impl Iterator<Item = io::Result<String>>,
 ) -> Result<u8, Failure> {
     let port: u16 = lines.next().ok_or("the input ended")??.parse()?;
-    let method = PairingMethod::builder(identity.clone()).build().unwrap();
+    let method = PairingMethod::builder()
+        .identity(identity.clone())
+        .build()
+        .unwrap();
     let responder = loop {
         let pin = lines.next().ok_or("the input ended")??;
         if pin.is_empty() {
@@ -190,9 +198,11 @@ fn join(
     };
     say(&format!("{{\"paired\":\"{responder}\"}}"))?;
     let socket = TcpStream::connect(("127.0.0.1", port))?;
-    let ordinary = Noise::builder(identity)
+    let ordinary = Noise::builder()
+        .identity(identity)
         .responders(Trust::pinned([responder]))
-        .build();
+        .build()
+        .unwrap();
     let mut framed = FramedStream::new(socket, MAX_HANDSHAKE_MESSAGE);
     let established = match drive_messages(ordinary.initiate()?, &mut framed) {
         Ok(established) => established,

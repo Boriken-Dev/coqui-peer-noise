@@ -51,11 +51,13 @@ fn initiator() -> Noise {
 }
 
 fn initiator_limited(key_limit: u64) -> Noise {
-    Noise::builder(identity_of(INITIATOR_STATIC))
+    Noise::builder()
+        .identity(identity_of(INITIATOR_STATIC))
         .responders(Trust::pinned([identity_of(RESPONDER_STATIC).peer_id()]))
         .random(scripted(&[INITIATOR_EPHEMERAL]))
         .key_limit(key_limit)
         .build()
+        .unwrap()
 }
 
 fn responder() -> Noise {
@@ -63,11 +65,13 @@ fn responder() -> Noise {
 }
 
 fn responder_limited(key_limit: u64) -> Noise {
-    Noise::builder(identity_of(RESPONDER_STATIC))
+    Noise::builder()
+        .identity(identity_of(RESPONDER_STATIC))
         .initiators(Trust::pinned([identity_of(INITIATOR_STATIC).peer_id()]))
         .random(scripted(&[RESPONDER_EPHEMERAL]))
         .key_limit(key_limit)
         .build()
+        .unwrap()
 }
 
 fn side(identity: &Identity, raw: [u8; 32], ephemeral: [u8; 32]) -> Value {

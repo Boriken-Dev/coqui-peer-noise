@@ -202,9 +202,11 @@ fn a_relay_cannot_answer_for_a_pinned_server_on_real_sockets() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let relay_key = coqui_peer_noise::Identity::generate().unwrap();
-    let as_relay = coqui_peer_noise::Noise::builder(relay_key)
+    let as_relay = coqui_peer_noise::Noise::builder()
+        .identity(relay_key)
         .initiators(coqui_peer_noise::Trust::pinned([client.peer_id()]))
-        .build();
+        .build()
+        .unwrap();
     let relaying = thread::spawn(move || {
         let (mut socket, _) = listener.accept().unwrap();
         // It sees the failure as the connection going away.
@@ -232,18 +234,26 @@ fn a_relay_holding_a_run_with_each_end_cannot_pass_one_ends_records_to_the_other
         coqui_peer_noise::Identity::generate().unwrap(),
     );
     let pinned = |id| coqui_peer_noise::Trust::pinned([id]);
-    let dialing = coqui_peer_noise::Noise::builder(client.clone())
+    let dialing = coqui_peer_noise::Noise::builder()
+        .identity(client.clone())
         .responders(pinned(relay.peer_id()))
-        .build();
-    let relay_answers = coqui_peer_noise::Noise::builder(relay.clone())
+        .build()
+        .unwrap();
+    let relay_answers = coqui_peer_noise::Noise::builder()
+        .identity(relay.clone())
         .initiators(pinned(client.peer_id()))
-        .build();
-    let relay_dials = coqui_peer_noise::Noise::builder(relay.clone())
+        .build()
+        .unwrap();
+    let relay_dials = coqui_peer_noise::Noise::builder()
+        .identity(relay.clone())
         .responders(pinned(server.peer_id()))
-        .build();
-    let listening = coqui_peer_noise::Noise::builder(server)
+        .build()
+        .unwrap();
+    let listening = coqui_peer_noise::Noise::builder()
+        .identity(server)
         .initiators(pinned(relay.peer_id()))
-        .build();
+        .build()
+        .unwrap();
     let sockets = sockets();
     let (outer, inner) = (
         sockets.outer.local_addr().unwrap(),

@@ -209,9 +209,11 @@ fn a_relay_running_a_handshake_of_its_own_fails_a_pin_and_misbinds_nobody() {
     let relay = Identity::generate().unwrap();
 
     // Facing the client, the relay answers as itself. The client pins the server.
-    let facing_client = Noise::builder(relay.clone())
+    let facing_client = Noise::builder()
+        .identity(relay.clone())
         .initiators(Trust::pinned([client.peer_id()]))
-        .build();
+        .build()
+        .unwrap();
     let (mut a, mut b) = (
         dialing.initiate().unwrap(),
         facing_client.respond(None).unwrap(),
@@ -219,9 +221,11 @@ fn a_relay_running_a_handshake_of_its_own_fails_a_pin_and_misbinds_nobody() {
     assert!(matches!(exchange(&mut a, &mut b), Err(Error::Untrusted)));
 
     // Facing the server, the relay dials as itself. The server pins the client.
-    let facing_server = Noise::builder(relay)
+    let facing_server = Noise::builder()
+        .identity(relay)
         .responders(Trust::pinned([server.peer_id()]))
-        .build();
+        .build()
+        .unwrap();
     let (mut a, mut b) = (
         facing_server.initiate().unwrap(),
         listening.respond(None).unwrap(),
@@ -239,18 +243,26 @@ fn a_client_that_trusts_a_relay_and_a_server_that_trusts_it_share_no_session_thr
         Identity::generate().unwrap(),
         Identity::generate().unwrap(),
     );
-    let client_side = Noise::builder(client.clone())
+    let client_side = Noise::builder()
+        .identity(client.clone())
         .responders(Trust::pinned([relay.peer_id()]))
-        .build();
-    let relay_as_responder = Noise::builder(relay.clone())
+        .build()
+        .unwrap();
+    let relay_as_responder = Noise::builder()
+        .identity(relay.clone())
         .initiators(Trust::pinned([client.peer_id()]))
-        .build();
-    let relay_as_initiator = Noise::builder(relay.clone())
+        .build()
+        .unwrap();
+    let relay_as_initiator = Noise::builder()
+        .identity(relay.clone())
         .responders(Trust::pinned([server.peer_id()]))
-        .build();
-    let server_side = Noise::builder(server)
+        .build()
+        .unwrap();
+    let server_side = Noise::builder()
+        .identity(server)
         .initiators(Trust::pinned([relay.peer_id()]))
-        .build();
+        .build()
+        .unwrap();
     let (near, relay_near) = run(&client_side, &relay_as_responder).unwrap();
     let (relay_far, far) = run(&relay_as_initiator, &server_side).unwrap();
     assert_eq!(near.peer, relay.peer_id());

@@ -223,9 +223,11 @@ fn one_private_key_proves_eight_ids_and_each_is_admitted_only_on_its_own() {
         .iter()
         .map(|&key| {
             // A pin of this key's id alone admits it.
-            let listening = Noise::builder(responder.clone())
+            let listening = Noise::builder()
+                .identity(responder.clone())
                 .initiators(Trust::pinned([id_of(&key)]))
-                .build();
+                .build()
+                .unwrap();
             run_as(PRIVATE, key, &responder, &listening).unwrap()
         })
         .collect();
@@ -233,14 +235,18 @@ fn one_private_key_proves_eight_ids_and_each_is_admitted_only_on_its_own() {
 
     // No trust carries from one to another: a pin of the honest key admits none of the rest, and a
     // store accepts none and keeps each apart.
-    let pinned_honest = Noise::builder(responder.clone())
+    let pinned_honest = Noise::builder()
+        .identity(responder.clone())
         .initiators(Trust::pinned([id_of(&honest)]))
-        .build();
+        .build()
+        .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let store = TrustStore::open(directory.path()).unwrap();
-    let stored = Noise::builder(responder.clone())
+    let stored = Noise::builder()
+        .identity(responder.clone())
         .initiators(Trust::Store(store.clone()))
-        .build();
+        .build()
+        .unwrap();
     for &key in keys.iter().filter(|&&key| key != honest) {
         assert!(matches!(
             run_as(PRIVATE, key, &responder, &pinned_honest),

@@ -111,9 +111,11 @@ fn a_handshake_deadline_holds_against_one_byte_at_a_time() {
     let (near, far) = connected();
     let sender = drip(far, frame_of(32), Duration::from_millis(100));
     let identity = Identity::generate().unwrap();
-    let method = Noise::builder(identity)
+    let method = Noise::builder()
+        .identity(identity)
         .initiators(Trust::pinned([]))
-        .build();
+        .build()
+        .unwrap();
     let mut framed = FramedStream::new(near, MAX_HANDSHAKE_MESSAGE);
     let started = Instant::now();
     let result = drive_messages_until(

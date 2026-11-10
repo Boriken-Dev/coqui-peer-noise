@@ -2,19 +2,21 @@
 
 use core::time::Duration;
 
-use crate::pairing::DEFAULT_FIRST_MESSAGE_TIMEOUT;
+use coqui_builder::Describe;
+
+use crate::handshake::NoiseBuilder;
+use crate::pairing::{DEFAULT_FIRST_MESSAGE_TIMEOUT, PairingMethodBuilder};
 use crate::session::DEFAULT_KEY_LIMIT;
 
-/// What a [`NoiseBuilder`](crate::NoiseBuilder) takes whole through `settings`.
+/// What a [`NoiseBuilder`](crate::NoiseBuilder) takes whole through `fill`.
 ///
 /// Identities, trust and the random source are not settings: they hold keys and code, so the
-/// builder takes them as arguments. Every key is optional (an absent one is its default) and an
-/// unknown key is refused. The type is a guatiao value (`from_value`, `to_value`, `schema`), and
-/// `guatiao_serde::text` reads and writes its text. It is `#[non_exhaustive]`: start from
+/// builder takes them as inputs. Every key is optional (an absent one is its default) and an
+/// unknown key is refused. The type is `Describe`, so a `Partial<NoiseSettings>` is filled from text
+/// and built. It is `#[non_exhaustive]`: start from
 /// [`Default`] and assign the fields.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Describe)]
+#[builder(setters_on = NoiseBuilder)]
 #[map(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct NoiseSettings {
@@ -42,15 +44,14 @@ impl Default for NoiseSettings {
     }
 }
 
-/// What a [`PairingMethodBuilder`](crate::PairingMethodBuilder) takes whole through `settings`: the
+/// What a [`PairingMethodBuilder`](crate::PairingMethodBuilder) takes whole through `fill`: the
 /// [`NoiseSettings`] keys and how long a responder waits for a joiner.
 ///
-/// Read as [`NoiseSettings`] is. `first_message_timeout` is a duration (a number of seconds,
-/// `[secs, nanos]` or `{secs, nanos}`); an absent key is `None`, no bound but the transport's,
-/// where [`Default`] is `Some(`[`DEFAULT_FIRST_MESSAGE_TIMEOUT`]`)`.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema,
-)]
+/// Read as [`NoiseSettings`] is. `first_message_timeout` is a duration (`30`, `0.25`, `30s`,
+/// `250ms`) or `never`, which is `None`, no bound but the transport's; an absent key is
+/// `Some(`[`DEFAULT_FIRST_MESSAGE_TIMEOUT`]`)`, as [`Default`] has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Describe)]
+#[builder(setters_on = PairingMethodBuilder)]
 #[map(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct PairingSettings {
@@ -64,9 +65,7 @@ pub struct PairingSettings {
     /// still applies if it is shorter. `Some(Duration::ZERO)` is refused when the method is built.
     /// `None` leaves the transport's own timeout as the only bound, and over a transport with none
     /// a silent stranger holds it until it closes.
-    // The derive cannot default an `Option`, so a document that leaves the key out reads `None`,
-    // not `Some(DEFAULT_FIRST_MESSAGE_TIMEOUT)` as `Default` does, and `non_defaults` compares
-    // this key by hand. The derive's `default = Some(..), none = "never"` replaces both.
+    #[map(default = Some(DEFAULT_FIRST_MESSAGE_TIMEOUT), none = "never")]
     pub first_message_timeout: Option<Duration>,
 }
 

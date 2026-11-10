@@ -83,9 +83,11 @@ fn respond(
     let listener = TcpListener::bind("127.0.0.1:0")?;
     say(&listener.local_addr()?.port().to_string())?;
     let (socket, source) = listener.accept()?;
-    let method = Noise::builder(identity)
+    let method = Noise::builder()
+        .identity(identity)
         .initiators(Trust::pinned([allowed]))
-        .build();
+        .build()
+        .unwrap();
     let (established, mut socket) = match prove(method.respond(Some(source))?, socket)? {
         Ok(proved) => proved,
         Err(status) => return Ok(status),
@@ -125,9 +127,11 @@ fn initiate(
     let expected: PeerId = next(lines)?.parse()?;
     let port: u16 = next(lines)?.parse()?;
     let socket = TcpStream::connect(("127.0.0.1", port))?;
-    let method = Noise::builder(identity)
+    let method = Noise::builder()
+        .identity(identity)
         .responders(Trust::pinned([expected]))
-        .build();
+        .build()
+        .unwrap();
     let (established, mut socket) = match prove(method.initiate()?, socket)? {
         Ok(proved) => proved,
         Err(status) => return Ok(status),

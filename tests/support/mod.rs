@@ -36,14 +36,18 @@ pub fn pinned_pair() -> (Identity, Identity, Noise, Noise) {
 /// As [`pinned_pair`], both sides drawing from `random`.
 pub fn pinned_pair_with(random: coqui_peer_noise::Random) -> (Identity, Identity, Noise, Noise) {
     let (client, server) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-    let dialing = Noise::builder(client.clone())
+    let dialing = Noise::builder()
+        .identity(client.clone())
         .responders(Trust::pinned([server.peer_id()]))
         .random(random.clone())
-        .build();
-    let listening = Noise::builder(server.clone())
+        .build()
+        .unwrap();
+    let listening = Noise::builder()
+        .identity(server.clone())
         .initiators(Trust::pinned([client.peer_id()]))
         .random(random)
-        .build();
+        .build()
+        .unwrap();
     (client, server, dialing, listening)
 }
 

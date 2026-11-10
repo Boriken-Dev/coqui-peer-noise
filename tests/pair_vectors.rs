@@ -64,11 +64,13 @@ fn joining(pin: &str) -> Pairing {
 }
 
 fn sessions() -> (PairingSession, PairingSession, [Vec<u8>; 3]) {
-    let near = PairingMethod::builder(identity_of(JOINER_STATIC))
+    let near = PairingMethod::builder()
+        .identity(identity_of(JOINER_STATIC))
         .random(scripted(&[JOINER_EPHEMERAL]))
         .build()
         .unwrap();
-    let far = PairingMethod::builder(identity_of(RESPONDER_STATIC))
+    let far = PairingMethod::builder()
+        .identity(identity_of(RESPONDER_STATIC))
         .random(scripted(&[RESPONDER_EPHEMERAL]))
         .build()
         .unwrap();
