@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Breaking: the builders are coqui-builder's.** `Noise::builder()` and `PairingMethod::builder()` take no arguments: the identity is
+  an input (`Noise::builder().identity(identity)`), as are `responders`, `initiators` and `random`. `build()` returns
+  `Result<Noise, Missing>` and `Result<PairingMethod, BuildError<Error>>` (`Missing` names `identity`; `Failed` holds
+  `Error::Settings` for a zero first-message timeout). `NoiseSettings` and `PairingSettings` derive `coqui_builder::Describe` in
+  place of guatiao's traits; they are read through `Partial` from TOML, JSON or the environment, and their setters (`key_limit`, `rekey`,
+  `first_message_timeout`) are methods of the builders, with the traits in the new `prelude` for other builders. `NoiseParts` and
+  `PairingMethodParts` are what the builders collect. `NoiseBuilder` and `PairingMethodBuilder` are no longer `Clone`.
+- **Breaking: `PairingSettings::first_message_timeout`** reads `never` for `None` and a duration text (`30`, `0.25`, `30s`, `250ms`, not
+  `[secs, nanos]`); a document that leaves the key out now reads `Some(60 s)`, as `Default` has it, where it read `None`.
+- **Breaking: `NonDefault` is coqui-builder's.** A `value` and a `default` print as `Type(text)` (`u64(1000)`, `bool(false)`,
+  `Duration(30s)`, `Duration(never)`, `Random(caller's)`). In the JavaScript module `nonDefaults()` has the same text, and a duration is
+  written as Rust writes one (`30s`, `250ms`, `1500us`, `700ns`).
 - **Breaking: a weakened setting is a non-default setting.** `Noise::non_defaults` and `PairingMethod::non_defaults` return coqui-peer's `NonDefault { setting, value, default }`,
   one for every setting that differs from its default, named by key path (`key_limit`, `rekey`, `first_message_timeout`),
   and `random` when it is replaced. In the JavaScript module `nonDefaults()` has the same entries, named by the same Rust key paths (`key_limit`, `rekey`,
@@ -17,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- **Breaking:** `NoiseBuilder::settings`, `PairingMethodBuilder::settings` (use `fill(Partial::from(settings))`), the guatiao
+  traits on `NoiseSettings` and `PairingSettings` (`ToValue`, `FromValue`, `Schema`), the writing of a settings value to text, and
+  `Clone` on `NoiseBuilder` and `PairingMethodBuilder`.
 - **Breaking:** the always-on `initiators` and `responders` = `any-with-key-proof` entries of a pairing method, in Rust
   and JavaScript: admitting any proved key is what a pairing method is, not a setting left off its default.
 

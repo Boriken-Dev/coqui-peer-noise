@@ -6,8 +6,8 @@ the package and is self-contained. Development documentation lives with the sour
 <https://github.com/Boriken-Dev/coqui-peer-noise>.
 
 One Cargo feature, off by default: `pin`, which is `coqui-peer/pin` (SPAKE2, HKDF, HMAC), for `pair::Pairing::pin`.
-MSRV Rust 1.89. A build depends on `coqui-peer` (by git revision, `e0f96b8`),
-`guatiao` (by revision), `x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`, `data-encoding`, `getrandom` and `zeroize`. This crate is
+MSRV Rust 1.89. A build depends on `coqui-peer` (by git revision, `984db3d`),
+`coqui-builder` (by revision), `x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`, `data-encoding`, `getrandom` and `zeroize`. This crate is
 unreleased, with one independent review by another AI agent (neither third-party nor formal) and no formal model
 of XX with SPAKE2 inside it: depend on a git revision, and name the same `coqui-peer`
 revision if you use it directly; the wire and API may change at any commit. This is the method named `noise`
@@ -15,7 +15,7 @@ of `coqui-peer` (`PeerId`, `TrustStore`, the sans-IO `Handshake`); its API heade
 `PROTOCOL.md` ships here and is the wire.
 
 Imports: everything is at the crate root, including re-exports of `coqui-peer`'s `Established`,
-`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore`, `NonDefault` and `pair`.
+`KeyMaterial`, `MessageTransport`, `Method`, `PeerId`, `Random`, `TrustStore`, `NonDefault` (coqui-builder's) and `pair`. `prelude` holds the settings setters traits (`NoiseSettingsSetters`, `PairingSettingsSetters`), for a builder written in another crate.
 
 No `unsafe` code (`#![forbid(unsafe_code)]`), no process-wide state. Nothing reads a file or an
 environment variable unless the caller names a path. Ephemeral and long-term keys, every chaining key, the export
@@ -80,23 +80,27 @@ pub const PROTOCOL_NAME: &str = "Noise_XX_25519_AESGCM_SHA256";
 pub fn random() -> Random;                    // the OS generator
 pub struct Noise;                             // Clone (shared); Debug shows no secret
 impl Noise {
-    pub fn builder(identity: Identity) -> NoiseBuilder;      // neither role until responders or initiators
+    pub fn builder() -> NoiseBuilder;      // neither role until responders or initiators
     pub fn identity(&self) -> &Identity;
     pub fn settings(&self) -> NoiseSettings;
     pub fn non_defaults(&self) -> Vec<NonDefault>;  // every NoiseSettings key that differs, by key path (`key_limit`, `rekey`); `random` when replaced
 }
-// Setters, the last wins; build() -> Noise:
-pub struct NoiseBuilder;                      // Clone; Debug
+// Not Clone. The last write of a key wins, whichever way it was written.
+pub struct NoiseBuilder;
+pub struct NoiseParts;                        // Debug; what the builder collects
 impl NoiseBuilder {
+    pub fn identity(self, identity: Identity) -> NoiseBuilder;      // required
     pub fn responders(self, trust: Trust) -> NoiseBuilder;  // whom initiate() admits
     pub fn initiators(self, trust: Trust) -> NoiseBuilder;  // whom respond() admits
     pub fn key_limit(self, bytes: u64) -> NoiseBuilder;     // per key, per direction; DEFAULT_KEY_LIMIT; no floor
     pub fn rekey(self, rekey: bool) -> NoiseBuilder;        // change key at the limit; on by default
     pub fn random(self, random: Random) -> NoiseBuilder;    // secure, or for test vectors only
-    pub fn settings(self, settings: NoiseSettings) -> NoiseBuilder;   // key_limit and rekey, whole
-    pub fn build(self) -> Noise;
+    pub fn fill(self, settings: Partial<NoiseSettings>) -> NoiseBuilder;   // only the keys the partial sets
+    pub fn fill_from(self, source: &mut impl Source) -> Result<NoiseBuilder, FillError>;
+    pub fn non_defaults(&self) -> Vec<NonDefault>;   // the settings' keys, not `random`
+    pub fn build(self) -> Result<Noise, Missing>;    // Missing names `identity`
 }
-// A guatiao value (ToValue, FromValue, Schema): every key optional, unknown keys refused.
+// Describe: every key optional, unknown keys refused; a Partial<NoiseSettings> is read from text and built.
 #[non_exhaustive] pub struct NoiseSettings { pub key_limit: u64, pub rekey: bool }   // Default: DEFAULT_KEY_LIMIT, true
 impl coqui_peer::Method for Noise { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct NoiseHandshake;
@@ -195,21 +199,26 @@ pub const MAX_PAIRING_RECORD: usize = 350;    // the longest record of an exchan
 pub const DEFAULT_FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct PairingMethod;                     // Clone; Debug
 impl PairingMethod {
-    pub fn builder(identity: Identity) -> PairingMethodBuilder;   // admits any proved key, in both roles
+    pub fn builder() -> PairingMethodBuilder;   // admits any proved key, in both roles
     pub fn identity(&self) -> &Identity;
     pub fn settings(&self) -> PairingSettings;
     pub fn non_defaults(&self) -> Vec<NonDefault>;    // every PairingSettings key that differs, by key path; `random` when replaced (admitting any proved key is what pairing is, not listed)
 }
-pub struct PairingMethodBuilder;              // Clone; Debug; build() -> Result<PairingMethod, Error>   (Error::Settings for Some(Duration::ZERO) as the first-message timeout)
+pub struct PairingMethodBuilder;              // not Clone
+pub struct PairingMethodParts;                // Debug; what the builder collects
 impl PairingMethodBuilder {
+    pub fn identity(self, identity: Identity) -> PairingMethodBuilder;   // required
     pub fn responders(self, trust: Trust) -> PairingMethodBuilder;   // a joiner verifies the responder
     pub fn first_message_timeout(self, timeout: impl Into<Option<Duration>>) -> PairingMethodBuilder;   // None leaves the transport's own bound; Some(ZERO) is refused by build()
     pub fn key_limit(self, bytes: u64) -> PairingMethodBuilder;
     pub fn rekey(self, rekey: bool) -> PairingMethodBuilder;
     pub fn random(self, random: Random) -> PairingMethodBuilder;
-    pub fn settings(self, settings: PairingSettings) -> PairingMethodBuilder;
+    pub fn fill(self, settings: Partial<PairingSettings>) -> PairingMethodBuilder;
+    pub fn fill_from(self, source: &mut impl Source) -> Result<PairingMethodBuilder, FillError>;
+    pub fn non_defaults(&self) -> Vec<NonDefault>;   // the settings' keys, not `random`
+    pub fn build(self) -> Result<PairingMethod, BuildError<Error>>;   // Missing names `identity`; Failed(Error::Settings) for Some(Duration::ZERO) as the first-message timeout
 }
-// As NoiseSettings, with `first_message_timeout: Option<Duration>` (a number of seconds; an absent key is None until the derive's `default = Some(..), none = "never"` lands); Default: DEFAULT_KEY_LIMIT, true, Some(60 s)
+// As NoiseSettings, with `first_message_timeout: Option<Duration>` (text: `30`, `0.25`, `30s`, `250ms`, or `never` for None; an absent key is Some(60 s)); Default: DEFAULT_KEY_LIMIT, true, Some(60 s)
 #[non_exhaustive] pub struct PairingSettings { pub key_limit: u64, pub rekey: bool, pub first_message_timeout: Option<Duration> }
 impl coqui_peer::Method for PairingMethod { /* name() = "noise"; initiate(); respond(source) */ }
 pub struct PairingHandshake;  // impl Handshake { Output = PairingSession, Framing::Message }

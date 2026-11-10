@@ -70,9 +70,10 @@ The module reads `seal` and `open` input, and the options, when called, so the c
 their place in call order.
 
 A setting is never refused for differing from its default, so **`nonDefaults()` says which do**: `[{setting, value, default}]`, each one that differs from
-its default, as text. On the objects `createInitiator` and its like give, named as Rust names them and with the text Rust gives:
-`key_limit` (a number), `rekey` (`false` against `true`), `first_message_timeout` (`[secs,nanos]`, as a duration) and a replaced
-`ephemeral` or `random`; admitting any proved key is what a pairing starter is, so it is not listed. On a desk: fewer `pinCombinations`, more `pinAttempts`, a longer `pinTtl`, a replaced `random` or `now`.
+its default, as text in the form Rust gives, `Type(text)`. On the objects `createInitiator` and its like give, named as Rust names them:
+`key_limit` (`u64(1000)`), `rekey` (`bool(false)` against `bool(true)`), `first_message_timeout` (`Duration(30s)` against `Duration(60s)`) and a replaced
+`ephemeral` (`Ephemeral(caller's)`) or `random` (`Random(caller's)` against `Random(the engine's)`); admitting any proved key is what a pairing starter is, so it is not listed. On a desk: fewer `pinCombinations` (`usize(10)`), more `pinAttempts` (`u32(3)`), a longer `pinTtl` (`Duration(700s)`), a replaced `random` or `now` (`Clock(caller's)`).
+A duration is written as Rust writes one: whole seconds (`30s`), else exactly milliseconds (`250ms`), microseconds (`1500us`) or nanoseconds (`700ns`); an `Infinity` of milliseconds is `Duration(never)`.
 
 An identity's private key must be non-extractable and X25519, and `peerId` must be the hash of `publicKey`, or
 `createInitiator` and `createResponder` throw. `openssl pkey -pubout -outform DER | sha256sum` gives a key's id. Each
