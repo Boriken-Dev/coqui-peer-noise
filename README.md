@@ -116,7 +116,7 @@ Everything is at the crate root.
 | `Trust` | whom a role admits: fixed pins, or a `TrustStore` |
 | `Session`, `Sealer`, `Opener` | records, the close, the limit, exports |
 | `FramedStream` | a byte stream as messages, refused by declared length before the body is read |
-| `PairingMethod`, `PairingHandshake`, `PairingSession`, `PairDial` | a stranger's handshake, and the sealed pairing drivers it ends in |
+| `PairingMethod`, `PairingHandshake`, `PairingSession`, `PairDial`, `JoinExchange` | a stranger's handshake, and the sealed pairing drivers it ends in |
 | `pair` | `coqui_peer::pair`, which runs on a `PairingSession` |
 
 ## Wire protocol

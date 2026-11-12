@@ -321,14 +321,29 @@ impl PairingSession {
         pairing: Pairing,
         transport: &mut T,
     ) -> Result<PairDial<'_, T>, Error> {
-        let joiner = pairing.join(self.pair_channel()?)?;
         let mut dial = PairDial {
-            session: self.session,
-            joiner,
+            exchange: self.joiner(pairing)?,
             transport,
         };
         dial.run(true)?;
         Ok(dial)
+    }
+
+    /// Joins with `pairing` a record at a time, for a caller with no blocking transport (a browser
+    /// page): [`JoinExchange::transmit`] gives each sealed record to send and
+    /// [`JoinExchange::receive`] takes each one that arrives. [`join`](PairingSession::join) is this
+    /// run over a [`MessageTransport`]; the warning on a `WrongCode` is the same.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Pairing`] when `pairing` refuses this session (an invitation's inviter is not the
+    /// proved key), before anything is sent.
+    pub fn joiner(self, pairing: Pairing) -> Result<JoinExchange, Error> {
+        let joiner = pairing.join(self.pair_channel()?)?;
+        Ok(JoinExchange {
+            session: self.session,
+            joiner,
+        })
     }
 
     /// Runs the responder until the end, each message sealed: redeeming an invitation, taking the
@@ -448,10 +463,71 @@ fn timed_out(error: &io::Error) -> bool {
     )
 }
 
-/// A joiner's exchange in progress: what to show a person, then the rest.
-pub struct PairDial<'t, T> {
+/// A joiner's exchange, a record at a time: no transport, so the caller moves the records.
+pub struct JoinExchange {
     session: Session,
     joiner: PairingJoiner,
+}
+
+impl fmt::Debug for JoinExchange {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("JoinExchange").finish_non_exhaustive()
+    }
+}
+
+impl JoinExchange {
+    /// The next sealed record to send, or `None` until a record arrives or the exchange is over.
+    /// Call until `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Record`] or [`Error::LimitReached`] when the session cannot seal.
+    pub fn transmit(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        self.joiner
+            .transmit()
+            .map(|message| self.session.seal(&message))
+            .transpose()
+    }
+
+    /// Takes a record from the responder. After an error, [`transmit`](JoinExchange::transmit)
+    /// still gives the refusal the responder is told, as far as the transport takes it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Pairing`] when refused, [`Error::Record`] for a bad record, [`Error::Truncated`]
+    /// when the responder closed early.
+    pub fn receive(&mut self, record: &[u8]) -> Result<(), Error> {
+        let message = open_record(&mut self.session, record)?;
+        Ok(self.joiner.receive(&message)?)
+    }
+
+    /// What to show a person now: a PIN with its slot, or a device flow's user code.
+    #[must_use]
+    pub fn shown(&self) -> Option<&Shown> {
+        self.joiner.shown()
+    }
+
+    /// Whether the responder has said all it will.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.joiner.is_complete()
+    }
+
+    /// The result, and this side's close record to send last.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Pairing`] unless the exchange [is complete](JoinExchange::is_complete).
+    pub fn finish(mut self) -> Result<(Paired, Vec<u8>), Error> {
+        let paired = self.joiner.finish()?;
+        let close = self.session.close()?;
+        Ok((paired, close))
+    }
+}
+
+/// A joiner's exchange in progress over a transport: what to show a person, then the rest.
+pub struct PairDial<'t, T> {
+    exchange: JoinExchange,
     transport: &'t mut T,
 }
 
@@ -464,21 +540,19 @@ impl<T> fmt::Debug for PairDial<'_, T> {
 impl<T: MessageTransport> PairDial<'_, T> {
     fn run(&mut self, stop_when_shown: bool) -> Result<(), Error> {
         loop {
-            while let Some(message) = self.joiner.transmit() {
-                self.transport.send(&self.session.seal(&message)?)?;
+            while let Some(record) = self.exchange.transmit()? {
+                self.transport.send(&record)?;
             }
-            if self.joiner.is_complete() || (stop_when_shown && self.joiner.shown().is_some()) {
+            if self.exchange.is_complete() || (stop_when_shown && self.exchange.shown().is_some()) {
                 return Ok(());
             }
             let record = self.transport.recv()?;
-            let message = open_record(&mut self.session, &record)?;
-            if let Err(error) = self.joiner.receive(&message) {
+            if let Err(error) = self.exchange.receive(&record) {
                 // The responder is told why, as far as the transport still takes it.
-                while let Some(message) = self.joiner.transmit() {
-                    let record = self.session.seal(&message)?;
+                while let Ok(Some(record)) = self.exchange.transmit() {
                     let _ = self.transport.send(&record);
                 }
-                return Err(error.into());
+                return Err(error);
             }
         }
     }
@@ -486,7 +560,7 @@ impl<T: MessageTransport> PairDial<'_, T> {
     /// What to show a person now: a PIN with its slot, or a device flow's user code.
     #[must_use]
     pub fn shown(&self) -> Option<&Shown> {
-        self.joiner.shown()
+        self.exchange.shown()
     }
 
     /// Runs the rest of the exchange. The caller stores [`Paired::peer`], and reconnects under
@@ -497,8 +571,8 @@ impl<T: MessageTransport> PairDial<'_, T> {
     /// As [`PairingSession::join`].
     pub fn finish(mut self) -> Result<Paired, Error> {
         self.run(false)?;
-        let close = self.session.close()?;
+        let (paired, close) = self.exchange.finish()?;
         let _ = self.transport.send(&close);
-        Ok(self.joiner.finish()?)
+        Ok(paired)
     }
 }

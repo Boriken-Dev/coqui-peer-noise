@@ -191,7 +191,7 @@ is `Error::LimitReached` from `seal` and ends the session.
 inside the session: **a plain message on the same transport comes from whoever carries it**, even after
 a successful handshake.
 
-## Pairing (`coqui_peer_noise::{PairingMethod, PairingSession, PairDial}`, `pair`)
+## Pairing (`coqui_peer_noise::{PairingMethod, PairingSession, PairDial, JoinExchange}`, `pair`)
 
 ```rust
 pub const PAIR_EXPORT_LABEL: &str = "EXPORTER-coqui-pair";
@@ -229,12 +229,21 @@ impl PairingSession {
     pub fn peer_id(&self) -> PeerId;
     pub fn pair_channel(&self) -> Result<pair::Channel, Error>;  // the proved key; no caller names it
     pub fn join<T: MessageTransport>(self, pairing: Pairing, transport: &mut T) -> Result<PairDial<'_, T>, Error>;
+    pub fn joiner(self, pairing: Pairing) -> Result<JoinExchange, Error>;   // join with no transport: the caller moves each record
     pub fn respond<T: MessageTransport + CurrentReadTimeout>(self, store: &TrustStore, desk: &PairingDesk,
         source: Option<SocketAddr>, transport: &mut T) -> Result<Paired, Error>;
 }
 impl<T: MessageTransport> PairDial<'_, T> {
     pub fn shown(&self) -> Option<&Shown>;    // a PIN with its slot, or a device flow's user code
     pub fn finish(self) -> Result<Paired, Error>;
+}
+pub struct JoinExchange;                      // Debug; a joiner's exchange a record at a time (a browser page has no blocking transport)
+impl JoinExchange {
+    pub fn transmit(&mut self) -> Result<Option<Vec<u8>>, Error>;   // the next sealed record to send; call until None
+    pub fn receive(&mut self, record: &[u8]) -> Result<(), Error>;  // after an error, transmit still gives the refusal the responder is told
+    pub fn shown(&self) -> Option<&Shown>;
+    pub fn is_complete(&self) -> bool;
+    pub fn finish(self) -> Result<(Paired, Vec<u8>), Error>;        // the result, and this side's close record to send last
 }
 ```
 

@@ -1471,3 +1471,84 @@ fn reads_that_time_out_at_once_end_the_exchange_after_a_few_whatever_time_is_lef
         drop(a);
     }
 }
+
+/// Runs a joiner a record at a time against `far.respond` on a thread, as a caller with no blocking
+/// transport does, and gives the result with whatever the joiner last sent.
+fn stepwise(
+    world: &World,
+    joiner: &Identity,
+    responder: &Identity,
+    pin: &str,
+) -> (Result<coqui_peer::pair::Paired, Error>, Result<(), Error>) {
+    let (near, far) = strangers(joiner, responder);
+    let (mut a, mut b) = pipes();
+    let serving = {
+        let (store, desk) = (world.store.clone(), world.desk.clone());
+        thread::spawn(move || far.respond(&store, &desk, None, &mut b).map(drop))
+    };
+    let mut exchange = near.joiner(typed(pin)).unwrap();
+    let joined = (|| {
+        loop {
+            while let Some(record) = exchange.transmit()? {
+                a.send(&record)?;
+            }
+            if exchange.is_complete() {
+                break;
+            }
+            let record = a.recv()?;
+            if let Err(error) = exchange.receive(&record) {
+                // The responder is told why, as `join` does.
+                while let Ok(Some(record)) = exchange.transmit() {
+                    let _ = a.send(&record);
+                }
+                return Err(error);
+            }
+        }
+        let (paired, close) = exchange.finish()?;
+        let _ = a.send(&close);
+        Ok(paired)
+    })();
+    drop(a);
+    (joined, serving.join().unwrap())
+}
+
+#[test]
+fn a_joiner_run_a_record_at_a_time_pairs_as_join_does() {
+    let world = world();
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let shown = world.desk.show_pin().unwrap();
+    let (paired, served) = stepwise(&world, &joiner, &responder, shown.pin.as_str());
+    let paired = paired.unwrap();
+    assert_eq!(paired.peer, responder.key_material());
+    assert_eq!(paired.mode, Mode::Pin);
+    served.unwrap();
+    assert!(world.store.is_accepted(&joiner.peer_id()));
+}
+
+#[test]
+fn a_joiner_run_a_record_at_a_time_is_refused_for_a_wrong_pin_and_pairs_nobody() {
+    let world = world();
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let shown = world.desk.show_pin().unwrap();
+    let (paired, served) = stepwise(&world, &joiner, &responder, other_pin(shown.pin.as_str()));
+    assert!(is_refusal(&paired.map(drop), PairRefusal::WrongCode));
+    assert!(is_refusal(&served, PairRefusal::WrongCode));
+    assert!(!world.store.is_accepted(&joiner.peer_id()));
+}
+
+#[test]
+fn a_record_that_does_not_open_ends_a_stepwise_joiner() {
+    let (joiner, responder) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let (near, _far) = strangers(&joiner, &responder);
+    let mut exchange = near.joiner(typed("000000")).unwrap();
+    while exchange.transmit().unwrap().is_some() {}
+    assert!(matches!(
+        exchange.receive(&[0; 40]),
+        Err(Error::Record | Error::Malformed)
+    ));
+    assert!(matches!(
+        exchange.receive(&[0; 40]),
+        Err(Error::Record | Error::Malformed)
+    ));
+    assert!(exchange.finish().is_err());
+}

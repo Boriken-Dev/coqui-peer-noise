@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `PairingSession::joiner` and `JoinExchange`: a joiner's pairing exchange a record at a time, for a caller with no blocking
+  transport (a page compiled to WebAssembly). `join` and `PairDial` are this run over a `MessageTransport`.
 - **Builders and settings.** `Noise::builder(identity)` and `PairingMethod::builder(identity)` set a method up by the
   setting's name (`responders`, `initiators`, `key_limit`, `rekey`, `random`, `first_message_timeout`, `settings`), then
   `build()`; there is no `new`. `NoiseSettings { key_limit, rekey }` and `PairingSettings` (those and
