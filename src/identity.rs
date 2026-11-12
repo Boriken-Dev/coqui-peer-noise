@@ -32,13 +32,17 @@ const PKCS8_PREFIX: [u8; PKCS8_LEN - DHLEN] = [
 ];
 
 struct Inner {
-    secret: StaticSecret,
+    secret: Option<StaticSecret>,
     public: [u8; DHLEN],
     spki: [u8; SPKI_LEN],
 }
 
 /// A peer's long-term X25519 key: the Noise static key, and the identity itself. Cloning shares one
 /// copy of the private key, which is zeroed when the last clone is dropped.
+///
+/// An identity made by [`from_public_key`](Identity::from_public_key) holds no private key, for a
+/// caller whose key lives elsewhere (a browser's non-extractable WebCrypto key): it can only dial,
+/// and the handshake pauses where the key is used.
 #[derive(Clone)]
 pub struct Identity(Arc<Inner>);
 
@@ -64,10 +68,37 @@ impl Identity {
     fn from_secret(secret: StaticSecret) -> Self {
         let public = PublicKey::from(&secret).to_bytes();
         Self(Arc::new(Inner {
-            secret,
+            secret: Some(secret),
             public,
             spki: spki_of(&public),
         }))
+    }
+
+    /// The identity of a key held elsewhere, from its 32-byte public key (RFC 7748's encoding). It
+    /// has the id the full key has. A handshake that dials with it stops where the static private
+    /// key is used and asks the caller for that Diffie-Hellman result
+    /// ([`NoiseHandshake::pending_static_dh`](crate::NoiseHandshake::pending_static_dh)); it cannot
+    /// accept a dial, and it has no PEM.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Key`] when `public` is not the one canonical encoding of a key.
+    pub fn from_public_key(public: &[u8; DHLEN]) -> Result<Self, Error> {
+        if !crate::noise::is_canonical(public) {
+            return Err(Error::Key);
+        }
+        Ok(Self(Arc::new(Inner {
+            secret: None,
+            public: *public,
+            spki: spki_of(public),
+        })))
+    }
+
+    /// Whether this identity holds its private key, and so can accept a dial and finish a
+    /// handshake alone.
+    #[must_use]
+    pub fn holds_private_key(&self) -> bool {
+        self.0.secret.is_some()
     }
 
     /// A new key from the operating system's generator.
@@ -138,11 +169,12 @@ impl Identity {
     ///
     /// # Errors
     ///
-    /// [`Error::Key`] when it cannot be encoded.
+    /// [`Error::Key`] when it cannot be encoded, or the identity holds no private key.
     pub fn to_pkcs8_pem(&self) -> Result<Zeroizing<String>, Error> {
+        let secret = self.0.secret.as_ref().ok_or(Error::Key)?;
         let mut der = Zeroizing::new([0u8; PKCS8_LEN]);
         der[..PKCS8_PREFIX.len()].copy_from_slice(&PKCS8_PREFIX);
-        der[PKCS8_PREFIX.len()..].copy_from_slice(self.0.secret.as_bytes());
+        der[PKCS8_PREFIX.len()..].copy_from_slice(secret.as_bytes());
         let mut body = Zeroizing::new(vec![0u8; BASE64.encode_len(PKCS8_LEN)]);
         BASE64.encode_mut(&*der, &mut body);
         let lines = body.len().div_ceil(PEM_LINE);
@@ -236,8 +268,8 @@ impl Identity {
         key_material(&self.0.public)
     }
 
-    pub(crate) fn secret(&self) -> &StaticSecret {
-        &self.0.secret
+    pub(crate) fn secret(&self) -> Option<&StaticSecret> {
+        self.0.secret.as_ref()
     }
 }
 

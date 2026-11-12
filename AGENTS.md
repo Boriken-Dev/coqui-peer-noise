@@ -29,6 +29,8 @@ pub struct Identity;                       // Clone (one shared copy); Debug sho
 impl Identity {
     pub fn generate() -> Result<Identity, Error>;                 // the OS generator
     pub fn generate_with(random: &Random) -> Result<Identity, Error>;
+    pub fn from_public_key(public: &[u8; 32]) -> Result<Identity, Error>;   // a key held elsewhere: Error::Key unless canonical; can dial only, no PEM
+    pub fn holds_private_key(&self) -> bool;
     pub fn from_pkcs8_der(der: &[u8]) -> Result<Identity, Error>;  // RFC 8410's 48 bytes, exactly
     pub fn from_pkcs8_pem(text: &str) -> Result<Identity, Error>; // -----BEGIN PRIVATE KEY-----
     pub fn to_pkcs8_pem(&self) -> Result<Zeroizing<String>, Error>;
@@ -42,7 +44,7 @@ impl Identity {
 }
 ```
 
-The Noise static key is the identity: there is no signing key. `openssl genpkey -algorithm x25519` writes a key this
+The Noise static key is the identity: there is no signing key. A held-elsewhere identity (`from_public_key`, for a browser's non-extractable WebCrypto key) dials with the id the full key has: after message 2 the handshake pauses (`NoiseHandshake::pending_static_dh() -> Option<[u8; 32]>`, the responder's ephemeral key; `PairingHandshake` has the same), the caller computes X25519 of its private key with that point, and `provide_static_dh(&[u8])` goes on with the result; an all-zero or wrong-length result is `Error::Malformed` and ends the handshake. `respond` with it is `Error::Unsupported`. `openssl genpkey -algorithm x25519` writes a key this
 reads, and `openssl pkey -pubout -outform DER | sha256sum` gives its id. On Windows a written file inherits its
 directory's ACL. Errors: `Error::Key` for what is not such a key, `Error::Io` for the file, `Error::Random`.
 

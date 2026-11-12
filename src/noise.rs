@@ -223,6 +223,8 @@ pub(crate) struct Xx {
     ephemeral: Box<StaticSecret>,
     remote_ephemeral: Option<[u8; DHLEN]>,
     remote_static: Option<[u8; DHLEN]>,
+    /// Message 3 written up to its `se`, waiting for the caller's result.
+    pending_third: Option<Vec<u8>>,
     next: u8,
 }
 
@@ -240,6 +242,7 @@ impl Xx {
             ephemeral,
             remote_ephemeral: None,
             remote_static: None,
+            pending_third: None,
             next: 0,
         }
     }
@@ -276,7 +279,8 @@ impl Xx {
     }
 
     fn mix_static_ephemeral(&mut self) -> Result<(), Error> {
-        let shared = dh(self.local.secret(), &self.peer_ephemeral()?)?;
+        let secret = self.local.secret().ok_or(Error::State)?;
+        let shared = dh(secret, &self.peer_ephemeral()?)?;
         self.symmetric.mix_key(shared.as_bytes());
         Ok(())
     }
@@ -310,6 +314,33 @@ impl Xx {
         let key = self.symmetric.decrypt_and_hash(sealed)?;
         self.remote_static = Some(public_key(&key)?);
         Ok(rest)
+    }
+
+    /// The first half of the initiator's message 3 when the static private key is not here: writes
+    /// `s`, and gives the responder's ephemeral key, which the caller's key makes the `se`
+    /// Diffie-Hellman with. [`finish_third`](Xx::finish_third) goes on from its result.
+    pub(crate) fn begin_third(&mut self) -> Result<[u8; DHLEN], Error> {
+        if (self.next, self.initiator) != (2, true) || self.pending_third.is_some() {
+            return Err(Error::State);
+        }
+        let ephemeral = self.peer_ephemeral()?;
+        let mut out = Vec::with_capacity(DHLEN + 2 * TAGLEN);
+        self.write_static(&mut out)?;
+        self.pending_third = Some(out);
+        Ok(ephemeral)
+    }
+
+    /// Message 3, given the `se` result the caller computed. A small-order peer key gives all
+    /// zeros, which is refused as [`dh`] refuses it.
+    pub(crate) fn finish_third(&mut self, shared: &[u8; DHLEN]) -> Result<Vec<u8>, Error> {
+        let mut out = self.pending_third.take().ok_or(Error::State)?;
+        if shared.iter().fold(0u8, |all, byte| all | byte) == 0 {
+            return Err(Error::Malformed);
+        }
+        self.symmetric.mix_key(shared);
+        out.extend_from_slice(&self.symmetric.encrypt_and_hash(&[])?);
+        self.next += 1;
+        Ok(out)
     }
 
     /// WriteMessage.

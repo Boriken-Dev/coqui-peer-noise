@@ -18,6 +18,7 @@ use crate::error::Error;
 use crate::framed::CurrentReadTimeout;
 use crate::handshake::{METHOD, Noise, NoiseHandshake, PURPOSE_PAIR, random_entry};
 use crate::identity::Identity;
+use crate::noise::DHLEN;
 use crate::session::Session;
 use crate::settings::PairingSettings;
 use crate::trust::{Admit, Trust};
@@ -196,6 +197,23 @@ impl fmt::Debug for PairingHandshake {
             .debug_struct("PairingHandshake")
             .field("complete", &self.handshake.is_complete())
             .finish_non_exhaustive()
+    }
+}
+
+impl PairingHandshake {
+    /// As [`NoiseHandshake::pending_static_dh`], for a joiner whose key is held elsewhere.
+    #[must_use]
+    pub fn pending_static_dh(&self) -> Option<[u8; DHLEN]> {
+        self.handshake.pending_static_dh()
+    }
+
+    /// As [`NoiseHandshake::provide_static_dh`].
+    ///
+    /// # Errors
+    ///
+    /// As [`NoiseHandshake::provide_static_dh`].
+    pub fn provide_static_dh(&mut self, shared: &[u8]) -> Result<(), Error> {
+        self.handshake.provide_static_dh(shared)
     }
 }
 
@@ -471,7 +489,9 @@ pub struct JoinExchange {
 
 impl fmt::Debug for JoinExchange {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("JoinExchange").finish_non_exhaustive()
+        formatter
+            .debug_struct("JoinExchange")
+            .finish_non_exhaustive()
     }
 }
 

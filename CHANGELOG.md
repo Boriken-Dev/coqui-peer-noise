@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `Identity::from_public_key`, `Identity::holds_private_key`, `NoiseHandshake::pending_static_dh` and `provide_static_dh` (and the same two on `PairingHandshake`): a dialer whose private key cannot leave its holder (a browser's non-extractable WebCrypto key) pauses at the one Diffie-Hellman that uses it, takes the holder's result and finishes the same handshake. The result is refused if it is all zeros.
 - `PairingSession::joiner` and `JoinExchange`: a joiner's pairing exchange a record at a time, for a caller with no blocking
   transport (a page compiled to WebAssembly). `join` and `PairDial` are this run over a `MessageTransport`.
 - **Builders and settings.** `Noise::builder(identity)` and `PairingMethod::builder(identity)` set a method up by the
