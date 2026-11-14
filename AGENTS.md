@@ -132,7 +132,7 @@ stream it takes, so a peer sending a byte at a time cannot outlast it; zero is a
 read; a `recv` that timed out keeps what it read of its frame for the next. A timeout set on the stream itself applies
 per read. Three messages, of 32, 96 and 64 bytes, each binary. `initiate` draws the
 ephemeral key and the first `transmit` gives the first message; `Error::Unsupported` without trust for that role.
-`finish` gives `Established { peer, key: Some(key), session }`.
+`finish` gives `Established { peer, key: Some(key), session }`: `key` is the peer's static public key as `KeyMaterial` (its 44-byte `SubjectPublicKeyInfo` in `bytes`, whose last 32 bytes are the X25519 point), on both ends, a dialer with a held-elsewhere key included. No private key is exposed.
 
 **An initiator finishes on sending the third message, and does not yet know it was accepted**: a responder that
 refuses it ends the connection. Records it sends meanwhile go only to the responder it proved.
